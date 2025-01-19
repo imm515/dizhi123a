@@ -18,8 +18,8 @@ jobs:
     - name: Fetch and Clean Webpage Content
       run: |
         # 通过 vars 引用变量
-        VMESS_URL="${{ vars.VMESS_URL }}"
-        SS_URL="${{ vars.SS_URL }}"
+        VMESS_URL="${{ secrets.VMESS_URL }}"
+        SS_URL="${{ secrets.SS_URL }}"
         
         # 获取网页内容，去掉 HTML 标签，并保存为纯文本文件
         curl -s "$VMESS_URL" | sed 's/<[^>]*>//g' > webpage_content.txt
