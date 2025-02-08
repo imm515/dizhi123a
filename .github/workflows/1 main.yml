@@ -1,4 +1,4 @@
-name: 1 Update Node Links and Push to Target Repository
+name: 1 main
 
 on:
   #schedule:
