@@ -1,0 +1,89 @@
+name: 2 Update Node Links with Report and Push to Target Repository
+
+on:
+  schedule:
+    - cron: '15 */1 * * *'  # 每1小时自动运行一次
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  update-nodes:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Shanghai  # 使用北京时间
+
+    steps:
+    - name: Checkout current repository
+      uses: actions/checkout@v3
+
+    - name: Record Start Time
+      id: start_time
+      run: |
+        echo "START_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+    - name: Fetch and Clean Webpage Content
+      run: |
+        # 通过 secrets 获取网页地址
+        VMESS_URL="${{ secrets.VMESS_URL }}"
+        SS_URL="${{ secrets.SS_URL }}"
+        
+        # 获取网页内容并去除 HTML 标签
+        curl -s "$VMESS_URL" | sed 's/<[^>]*>//g' > webpage_content.txt
+        curl -s "$SS_URL" | sed 's/<[^>]*>//g' > ss_webpage_content.txt
+        echo "Webpage content cleaned and saved."
+
+    - name: Fetch and Update Nodes from Content Files
+      run: |
+        # 提取各类型节点，并去除首尾空白字符、替换转义字符，并排序去重
+        VMESS_NODES=$(grep -oP '.*vmess://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
+        VLESS_NODES=$(grep -oP '.*vless://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
+        SS_NODES=$(grep -oP '.*ss://\S+' ss_webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
+        
+        # 将提取的节点数据保存到各自文件中
+        echo "$VMESS_NODES" > dizhi1.txt
+        echo "$VLESS_NODES" > dizhi2.txt
+        echo "$SS_NODES" > dizhi3.txt
+        echo "Node data saved to files."
+
+    - name: Checkout target repository
+      uses: actions/checkout@v3
+      with:
+        repository: ${{ secrets.TARGET_REPO }}  # 目标仓库名称由 Secrets 提供
+        token: ${{ secrets.TARGET_PAT }}         # 使用 Secrets 中的 PAT
+        path: target-repo
+
+    - name: Copy files to target repository
+      run: |
+        cp dizhi1.txt dizhi2.txt dizhi3.txt ss_webpage_content.txt webpage_content.txt target-repo/${{ secrets.TARGET_FOLDER }}/
+        echo "Files copied to target repository's folder."
+
+    - name: Record End Time and Calculate Duration
+      id: end_time
+      run: |
+        END_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+        START_TIME_SECONDS=$(date -d "${{ env.START_TIME }}" +'%s')
+        END_TIME_SECONDS=$(date -d "$END_TIME" +'%s')
+        DURATION=$((END_TIME_SECONDS - START_TIME_SECONDS))
+        HOURS=$((DURATION / 3600))
+        MINUTES=$(( (DURATION % 3600) / 60 ))
+        SECONDS=$((DURATION % 60))
+        printf -v FORMATTED_DURATION "%02d:%02d:%02d" $HOURS $MINUTES $SECONDS
+        echo "END_TIME=$END_TIME" >> $GITHUB_ENV
+        echo "DURATION=$FORMATTED_DURATION" >> $GITHUB_ENV
+
+    - name: Append Report Link to ss_webpage_content.txt
+      run: |
+        # 使用记录的开始时间和计算得到的耗时，构造报告链接
+        START_TIME_BEIJING="${{ env.START_TIME }}"
+        REPORT_LINK="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告 ${START_TIME_BEIJING} 耗时: ${{ env.DURATION }}"
+        
+        # 在文件末尾换行后追加报告链接
+        echo -e "\n$REPORT_LINK" >> "target-repo/${{ secrets.TARGET_FOLDER }}/ss_webpage_content.txt"
+
+    - name: Commit and Push changes to target repository
+      run: |
+        cd target-repo
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "actions@github.com"
+        git add .
+        git commit -m "Update nodes data"
+        git push origin main
