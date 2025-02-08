@@ -1,4 +1,4 @@
-name: 2 Update Node Links with Report and Push to Target Repository
+name: 2 Update Node Links with Runtime Report and Push to Target Repository
 
 on:
   schedule:
@@ -70,14 +70,14 @@ jobs:
         echo "END_TIME=$END_TIME" >> $GITHUB_ENV
         echo "DURATION=$FORMATTED_DURATION" >> $GITHUB_ENV
 
-    - name: Append Report Link to ss_webpage_content.txt
+    - name: Append Report Link to dizhi3.txt
       run: |
         # 使用记录的开始时间和计算得到的耗时，构造报告链接
         START_TIME_BEIJING="${{ env.START_TIME }}"
         REPORT_LINK="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告 ${START_TIME_BEIJING} 耗时: ${{ env.DURATION }}"
         
         # 在文件末尾换行后追加报告链接
-        echo -e "\n$REPORT_LINK" >> "target-repo/${{ secrets.TARGET_FOLDER }}/ss_webpage_content.txt"
+        echo -e "\n$REPORT_LINK" >> "target-repo/${{ secrets.TARGET_FOLDER }}/dizhi3.txt"
 
     - name: Commit and Push changes to target repository
       run: |
@@ -85,5 +85,5 @@ jobs:
         git config --global user.name "GitHub Actions"
         git config --global user.email "actions@github.com"
         git add .
-        git commit -m "Update nodes data"
+        git commit -m "Update nodes data with runtime report"
         git push origin main
