@@ -36,7 +36,9 @@ jobs:
         # 提取各类型节点，并去除首尾空白字符、替换转义字符，并排序去重
         VMESS_NODES=$(grep -oP '.*vmess://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
         VLESS_NODES=$(grep -oP '.*vless://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
-        SS_NODES=$(grep -oP '.*ss://\S+' ss_webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
+        
+        # 提取 ss:// 和 ssr:// 节点，并合并到 SS_NODES
+        SS_NODES=$(grep -oP '.*(ss://|ssr://)\S+' ss_webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
         
         # 将提取的节点数据保存到各自文件中
         echo "$VMESS_NODES" > dizhi1.txt
