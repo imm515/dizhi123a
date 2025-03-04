@@ -1,4 +1,4 @@
-name: 2 Update Node Links with Runtime Report and Push to Target Repository
+name: 1 Update Node Links with Runtime Report and Push to Target Repository
 
 on:
   schedule:
