@@ -118,14 +118,14 @@ jobs:
           DIZHI1_DAYS=$(get_days_since_last_update "dizhi1.txt")
           DIZHI2_DAYS=$(get_days_since_last_update "dizhi2.txt")
           DIZHI3_DAYS=$(get_days_since_last_update "dizhi3.txt")
-          REPORT_INFO+=" 无更新：vm:${DIZHI1_DAYS},vl:${DIZHI2_DAYS},ss:${DIZHI3_DAYS}"
+          REPORT_INFO+=" 无更新：vm:${DIZHI1_DAYS} vl:${DIZHI2_DAYS} ss:${DIZHI3_DAYS}"
         else
           # 如果有文件变化，报告哪个文件更新了
           UPDATED_FILES=()
           [[ "$DIZHI1_CHANGED" == "true" ]] && UPDATED_FILES+=("vm")
           [[ "$DIZHI2_CHANGED" == "true" ]] && UPDATED_FILES+=("vl")
           [[ "$DIZHI3_CHANGED" == "true" ]] && UPDATED_FILES+=("ss")
-          REPORT_INFO+=" 更新：$(IFS=,; echo "${UPDATED_FILES[*]}")"
+          REPORT_INFO+=" 更新：$(IFS=' '; echo "${UPDATED_FILES[*]}")"
         fi
 
         # 构造报告链接
