@@ -111,7 +111,7 @@ jobs:
         DIZHI2_CHANGED=$(check_file_changed "dizhi2.txt")
         DIZHI3_CHANGED=$(check_file_changed "dizhi3.txt")
 
-        # 构造报告信息
+        # 构造报告信息（材料2的逻辑）
         REPORT_INFO="%23报告 ${START_TIME_BEIJING}"
         if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
           # 如果文件均未变化，输出距离当前时间的天数
@@ -128,11 +128,15 @@ jobs:
           REPORT_INFO+=" 更新：$(IFS=' '; echo "${UPDATED_FILES[*]}")"
         fi
 
-        # 构造报告链接
-        REPORT_LINK="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
+        # 构造报告链接（材料2的逻辑）
+        REPORT_LINK_2="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
 
-        # 将报告链接写入 dizhiR.txt
-        echo "$REPORT_LINK" > "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
+        # 构造报告链接（材料1的逻辑）
+        REPORT_LINK_1="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${START_TIME_BEIJING} 耗时: ${{ env.DURATION }}"
+
+        # 将两个报告链接写入 dizhiR.txt
+        echo "$REPORT_LINK_1" > "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
+        echo "$REPORT_LINK_2" >> "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
 
     - name: Generate dizhi123.txt
       run: |
