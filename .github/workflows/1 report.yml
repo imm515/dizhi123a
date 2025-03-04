@@ -74,11 +74,64 @@ jobs:
 
     - name: Append Report Link to dizhiR.txt
       run: |
-        # 使用记录的开始时间和计算得到的耗时，构造报告链接
-        START_TIME_BEIJING="${{ env.START_TIME }}"
-        REPORT_LINK="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告 ${START_TIME_BEIJING} 耗时: ${{ env.DURATION }}"
-        
-        # 直接追加报告链接，不换行
+        # 获取当前时间
+        CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+        CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
+
+        # 计算文件最后更新时间距离当前时间的天数
+        get_days_since_last_update() {
+          local file="$1"
+          if [[ -f "$file" ]]; then
+            LAST_UPDATED=$(date -r "$file" +'%Y-%m-%d %H:%M:%S')
+            LAST_UPDATED_SECONDS=$(date -d "$LAST_UPDATED" +'%s')
+            DAYS_DIFF=$(( (CURRENT_TIME_SECONDS - LAST_UPDATED_SECONDS) / 86400 ))
+            echo "$DAYS_DIFF"
+          else
+            echo "文件不存在"
+          fi
+        }
+
+        # 检查文件是否发生变化
+        check_file_changed() {
+          local file="$1"
+          local target_file="target-repo/${{ secrets.TARGET_FOLDER }}/$file"
+          if [[ -f "$target_file" ]]; then
+            if ! diff -q "$file" "$target_file" > /dev/null; then
+              echo "true"
+            else
+              echo "false"
+            fi
+          else
+            echo "true"  # 如果目标文件不存在，则认为发生了变化
+          fi
+        }
+
+        # 检查每个文件是否发生变化
+        DIZHI1_CHANGED=$(check_file_changed "dizhi1.txt")
+        DIZHI2_CHANGED=$(check_file_changed "dizhi2.txt")
+        DIZHI3_CHANGED=$(check_file_changed "dizhi3.txt")
+
+        # 构造报告信息
+        REPORT_INFO="%23报告 ${START_TIME_BEIJING}"
+        if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
+          # 如果文件均未变化，输出距离当前时间的天数
+          DIZHI1_DAYS=$(get_days_since_last_update "dizhi1.txt")
+          DIZHI2_DAYS=$(get_days_since_last_update "dizhi2.txt")
+          DIZHI3_DAYS=$(get_days_since_last_update "dizhi3.txt")
+          REPORT_INFO+=" 无更新：vm:${DIZHI1_DAYS},vl:${DIZHI2_DAYS},ss:${DIZHI3_DAYS}"
+        else
+          # 如果有文件变化，报告哪个文件更新了
+          UPDATED_FILES=()
+          [[ "$DIZHI1_CHANGED" == "true" ]] && UPDATED_FILES+=("vm")
+          [[ "$DIZHI2_CHANGED" == "true" ]] && UPDATED_FILES+=("vl")
+          [[ "$DIZHI3_CHANGED" == "true" ]] && UPDATED_FILES+=("ss")
+          REPORT_INFO+=" 更新：$(IFS=,; echo "${UPDATED_FILES[*]}")"
+        fi
+
+        # 构造报告链接
+        REPORT_LINK="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
+
+        # 将报告链接写入 dizhiR.txt
         echo "$REPORT_LINK" > "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
 
     - name: Generate dizhi123.txt
