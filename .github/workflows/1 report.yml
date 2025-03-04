@@ -131,7 +131,7 @@ jobs:
         # 构造报告链接（材料2的逻辑）
         REPORT_LINK_2="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
 
-        # 构造报告链接（材料1的逻辑）
+        # 构造报告链接（材料1的逻辑，完全一致）
         REPORT_LINK_1="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${START_TIME_BEIJING} 耗时: ${{ env.DURATION }}"
 
         # 将两个报告链接写入 dizhiR.txt
