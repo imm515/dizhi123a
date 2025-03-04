@@ -79,7 +79,7 @@ jobs:
         REPORT_LINK="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告 ${START_TIME_BEIJING} 耗时: ${{ env.DURATION }}"
         
         # 直接追加报告链接，不换行
-        echo "$REPORT_LINK" >> "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
+        echo "$REPORT_LINK" > "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
 
     - name: Generate dizhi123.txt
       run: |
