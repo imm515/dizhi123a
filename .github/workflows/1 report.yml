@@ -130,7 +130,8 @@ jobs:
         echo "::debug::File changed status - D1: $DIZHI1_CHANGED, D2: $DIZHI2_CHANGED, D3: $DIZHI3_CHANGED" >&2
 
         # 构造报告信息
-        REPORT_INFO="%23报告 ${{ env.START_TIME }}"
+        #REPORT_INFO="%23报告 ${{ env.START_TIME }}"
+        EPORT_INFO="%23报告A "
         if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
           # 获取最后commit时间（秒数）
           D1_SEC=$(get_last_commit "dizhi1.txt")
@@ -143,7 +144,7 @@ jobs:
           D3_DAYS=$(echo "scale=1; $D3_SEC/86400" | bc -l | xargs printf "%.1f")
           
           echo "::debug::Days since last update - D1: $D1_DAYS, D2: $D2_DAYS, D3: $D3_DAYS" >&2
-          REPORT_INFO+=" vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}"
+          REPORT_INFO+="UTD vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}"
         else
           UPDATED=()
           [[ "$DIZHI1_CHANGED" == "true" ]] && UPDATED+=("vm")
