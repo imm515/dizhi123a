@@ -2,7 +2,7 @@ name: 1 Update Node Links with Runtime Report and Push to Target Repository
 
 on:
   schedule:
-    - cron: '35 */1 * * *'  # 每1小时自动运行一次
+    - cron: '35 */6 * * *'  # 每6小时自动运行一次
   workflow_dispatch:  # 支持手动触发
 
 jobs:
@@ -71,13 +71,26 @@ jobs:
         printf -v FORMATTED_DURATION "%02d:%02d:%02d" $HOURS $MINUTES $SECONDS
         echo "END_TIME=$END_TIME" >> $GITHUB_ENV
         echo "DURATION=$FORMATTED_DURATION" >> $GITHUB_ENV
-    
+
     - name: Append Report Link to dizhiR.txt
       run: |
-        # 获取当前时间（北京时间）
-        CURRENT_TIME=$(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M:%S')
-        CURRENT_TIME_SECONDS=$(TZ=Asia/Shanghai date -d "$CURRENT_TIME" +'%s')
-    
+        # 获取当前时间
+        CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+        CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
+
+        # 计算文件最后更新时间距离当前时间的天数
+        get_days_since_last_update() {
+          local file="$1"
+          if [[ -f "$file" ]]; then
+            LAST_UPDATED=$(date -r "$file" +'%Y-%m-%d %H:%M:%S')
+            LAST_UPDATED_SECONDS=$(date -d "$LAST_UPDATED" +'%s')
+            DAYS_DIFF=$(( (CURRENT_TIME_SECONDS - LAST_UPDATED_SECONDS) / 86400 ))
+            echo "$DAYS_DIFF"
+          else
+            echo "文件不存在"
+          fi
+        }
+
         # 检查文件是否发生变化
         check_file_changed() {
           local file="$1"
@@ -92,41 +105,19 @@ jobs:
             echo "true"  # 如果目标文件不存在，则认为发生了变化
           fi
         }
-    
+
         # 检查每个文件是否发生变化
         DIZHI1_CHANGED=$(check_file_changed "dizhi1.txt")
         DIZHI2_CHANGED=$(check_file_changed "dizhi2.txt")
         DIZHI3_CHANGED=$(check_file_changed "dizhi3.txt")
-    
-        # 计算文件最后更新时间距离当前时间的天数（强制保留1位小数）
-        get_days_since_last_update() {
-          local file="$1"
-          if [[ -f "target-repo/${{ secrets.TARGET_FOLDER }}/$file" ]]; then
-            # 进入目标仓库目录获取提交时间（UTC 时间）
-            cd target-repo
-            LAST_UPDATED=$(git log -1 --format="%cd" --date=iso "../${{ secrets.TARGET_FOLDER }}/$file")
-            cd ..
-            # 将 UTC 时间转换为北京时间
-            LAST_UPDATED_BEIJING=$(TZ=Asia/Shanghai date -d "$LAST_UPDATED" +'%Y-%m-%d %H:%M:%S')
-            LAST_UPDATED_SECONDS=$(TZ=Asia/Shanghai date -d "$LAST_UPDATED_BEIJING" +'%s')
-            CURRENT_TIME_SECONDS=$(TZ=Asia/Shanghai date -d "$CURRENT_TIME" +'%s')
-            SECONDS_DIFF=$((CURRENT_TIME_SECONDS - LAST_UPDATED_SECONDS))
-            DAYS_DIFF=$(echo "scale=1; $SECONDS_DIFF / 86400" | bc | awk '{printf "%.1f\n", $0}')
-            echo "$DAYS_DIFF"
-          else
-            echo "文件不存在"
-          fi
-        }
-    
-        # 获取每个文件的最后更新时间
-        DIZHI1_DAYS=$(get_days_since_last_update "dizhi1.txt")
-        DIZHI2_DAYS=$(get_days_since_last_update "dizhi2.txt")
-        DIZHI3_DAYS=$(get_days_since_last_update "dizhi3.txt")
-    
-        # 构造报告信息
-        REPORT_INFO="%23报告 ${{ env.START_TIME }}"
+
+        # 构造报告信息（材料2的逻辑）
+        REPORT_INFO="%23报告 ${START_TIME_BEIJING}"
         if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
-          # 如果文件均未变化，输出距离当前时间的天数（1位小数）
+          # 如果文件均未变化，输出距离当前时间的天数
+          DIZHI1_DAYS=$(get_days_since_last_update "dizhi1.txt")
+          DIZHI2_DAYS=$(get_days_since_last_update "dizhi2.txt")
+          DIZHI3_DAYS=$(get_days_since_last_update "dizhi3.txt")
           REPORT_INFO+="UTD：vm:${DIZHI1_DAYS} vl:${DIZHI2_DAYS} ss:${DIZHI3_DAYS}"
         else
           # 如果有文件变化，报告哪个文件更新了
@@ -136,17 +127,17 @@ jobs:
           [[ "$DIZHI3_CHANGED" == "true" ]] && UPDATED_FILES+=("ss")
           REPORT_INFO+="更新：$(IFS=' '; echo "${UPDATED_FILES[*]}")"
         fi
-    
-        # 构造报告链接
+
+        # 构造报告链接（材料2的逻辑）
         REPORT_LINK_2="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
-    
+
         # 构造报告链接（材料1的逻辑，完全一致）
         REPORT_LINK_1="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${{ env.START_TIME }} 耗时: ${{ env.DURATION }}"
-    
+
         # 将两个报告链接写入 dizhiR.txt
         echo "$REPORT_LINK_1" > "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
         echo "$REPORT_LINK_2" >> "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
-        
+
     - name: Generate dizhi123.txt
       run: |
         # 拼接 dizhi1.txt、dizhi2.txt、dizhi3.txt 和 dizhiR.txt 的内容，并在每个文件内容之间添加一个空行
