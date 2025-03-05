@@ -138,10 +138,10 @@ jobs:
           D2_SEC=$(get_last_commit "dizhi2.txt")
           D3_SEC=$(get_last_commit "dizhi3.txt")
           
-          # 计算天数（保留一位小数）
-          D1_DAYS=$(echo "scale=1; $D1_SEC/86400" | bc -l | xargs printf "%.1f")
-          D2_DAYS=$(echo "scale=1; $D2_SEC/86400" | bc -l | xargs printf "%.1f")
-          D3_DAYS=$(echo "scale=1; $D3_SEC/86400" | bc -l | xargs printf "%.1f")
+          # 计算天数（保留2位小数）
+          D1_DAYS=$(echo "scale=1; $D1_SEC/86400" | bc -l | xargs printf "%.2f")
+          D2_DAYS=$(echo "scale=1; $D2_SEC/86400" | bc -l | xargs printf "%.2f")
+          D3_DAYS=$(echo "scale=1; $D3_SEC/86400" | bc -l | xargs printf "%.2f")
           
           echo "::debug::Days since last update - D1: $D1_DAYS, D2: $D2_DAYS, D3: $D3_DAYS" >&2
           REPORT_INFO+="UTD vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}"
