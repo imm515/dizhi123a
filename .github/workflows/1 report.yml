@@ -60,7 +60,7 @@ jobs:
         repository: ${{ secrets.TARGET_REPO }}
         token: ${{ secrets.TARGET_PAT }}
         path: target-repo
-        fetch-depth: 0  # 获取完整commit历史
+        fetch-depth: 1  # 仅拉取最新 commit
 
     - name: Copy files to target repository
       run: |
