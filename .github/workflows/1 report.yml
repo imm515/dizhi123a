@@ -143,7 +143,7 @@ jobs:
           D3_DAYS=$(echo "scale=1; $D3_SEC/86400" | bc -l | xargs printf "%.1f")
           
           echo "::debug::Days since last update - D1: $D1_DAYS, D2: $D2_DAYS, D3: $D3_DAYS" >&2
-          REPORT_INFO+="UTD：vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}"
+          REPORT_INFO+=" vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}"
         else
           UPDATED=()
           [[ "$DIZHI1_CHANGED" == "true" ]] && UPDATED+=("vm")
