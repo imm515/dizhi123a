@@ -131,7 +131,7 @@ jobs:
 
         # 构造报告信息
         #REPORT_INFO="%23报告 ${{ env.START_TIME }}"
-        EPORT_INFO="%23报告A "
+        REPORT_INFO="%23报告A "
         if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
           # 获取最后commit时间（秒数）
           D1_SEC=$(get_last_commit "dizhi1.txt")
