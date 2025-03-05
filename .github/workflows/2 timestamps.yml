@@ -143,11 +143,11 @@ jobs:
       run: |
         {
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi1.txt
-          echo -e "\n"
+          echo -e #"\n"
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi2.txt
-          echo -e "\n"
+          echo -e #"\n"
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi3.txt
-          echo -e "\n"
+          echo -e #"\n"
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
         } > target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
 
