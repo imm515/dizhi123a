@@ -137,7 +137,7 @@ jobs:
 
         # 生成报告链接
         echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${{ env.START_TIME }} 耗时: ${{ env.DURATION }}" > target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
-        echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#UTD vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}" >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
+        echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}" >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
 
     - name: Generate dizhi123.txt
       run: |
