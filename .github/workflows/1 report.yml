@@ -101,12 +101,15 @@ jobs:
         # 计算文件最后更新时间距离当前时间的天数（强制保留1位小数）
         get_days_since_last_update() {
           local file="$1"
-          if [[ -f "$file" ]]; then
-            LAST_UPDATED=$(date -r "$file" +'%Y-%m-%d %H:%M:%S')
+          if [[ -f "target-repo/${{ secrets.TARGET_FOLDER }}/$file" ]]; then
+            # 进入目标仓库目录获取提交时间
+            cd target-repo
+            LAST_UPDATED=$(git log -1 --format="%cd" --date=iso "../${{ secrets.TARGET_FOLDER }}/$file")
+            cd ..
             LAST_UPDATED_SECONDS=$(date -d "$LAST_UPDATED" +'%s')
             CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
             SECONDS_DIFF=$((CURRENT_TIME_SECONDS - LAST_UPDATED_SECONDS))
-            DAYS_DIFF=$(echo "scale=1; $SECONDS_DIFF / 86400" | bc | awk '{printf "%.1f\n", $0}')  # 强制保留1位小数
+            DAYS_DIFF=$(echo "scale=1; $SECONDS_DIFF / 86400" | bc | awk '{printf "%.1f\n", $0}')
             echo "$DAYS_DIFF"
           else
             echo "文件不存在"
