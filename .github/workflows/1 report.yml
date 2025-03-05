@@ -71,13 +71,13 @@ jobs:
         printf -v FORMATTED_DURATION "%02d:%02d:%02d" $HOURS $MINUTES $SECONDS
         echo "END_TIME=$END_TIME" >> $GITHUB_ENV
         echo "DURATION=$FORMATTED_DURATION" >> $GITHUB_ENV
-
+    
     - name: Append Report Link to dizhiR.txt
       run: |
         # 获取当前时间
         CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
         CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
-
+    
         # 检查文件是否发生变化
         check_file_changed() {
           local file="$1"
@@ -92,12 +92,12 @@ jobs:
             echo "true"  # 如果目标文件不存在，则认为发生了变化
           fi
         }
-
+    
         # 检查每个文件是否发生变化
         DIZHI1_CHANGED=$(check_file_changed "dizhi1.txt")
         DIZHI2_CHANGED=$(check_file_changed "dizhi2.txt")
         DIZHI3_CHANGED=$(check_file_changed "dizhi3.txt")
-
+    
         # 计算文件最后更新时间距离当前时间的天数（强制保留1位小数）
         get_days_since_last_update() {
           local file="$1"
@@ -115,14 +115,16 @@ jobs:
             echo "文件不存在"
           fi
         }
-        
-        # 构造报告信息（材料2的逻辑）
+    
+        # 获取每个文件的最后更新时间
+        DIZHI1_DAYS=$(get_days_since_last_update "dizhi1.txt")
+        DIZHI2_DAYS=$(get_days_since_last_update "dizhi2.txt")
+        DIZHI3_DAYS=$(get_days_since_last_update "dizhi3.txt")
+    
+        # 构造报告信息
         REPORT_INFO="%23报告 ${START_TIME_BEIJING}"
         if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
           # 如果文件均未变化，输出距离当前时间的天数（1位小数）
-          DIZHI1_DAYS=$(get_days_since_last_update "dizhi1.txt")
-          DIZHI2_DAYS=$(get_days_since_last_update "dizhi2.txt")
-          DIZHI3_DAYS=$(get_days_since_last_update "dizhi3.txt")
           REPORT_INFO+="UTD：vm:${DIZHI1_DAYS} vl:${DIZHI2_DAYS} ss:${DIZHI3_DAYS}"
         else
           # 如果有文件变化，报告哪个文件更新了
@@ -132,16 +134,16 @@ jobs:
           [[ "$DIZHI3_CHANGED" == "true" ]] && UPDATED_FILES+=("ss")
           REPORT_INFO+="更新：$(IFS=' '; echo "${UPDATED_FILES[*]}")"
         fi
-        
-        # 构造报告链接（材料2的逻辑）
+    
+        # 构造报告链接
         REPORT_LINK_2="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
-                
+    
         # 构造报告链接（材料1的逻辑，完全一致）
         REPORT_LINK_1="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${{ env.START_TIME }} 耗时: ${{ env.DURATION }}"
-
+    
         # 将两个报告链接写入 dizhiR.txt
         echo "$REPORT_LINK_1" > "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
-        echo "$REPORT_LINK_2" >> "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"    
+        echo "$REPORT_LINK_2" >> "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
         
     - name: Generate dizhi123.txt
       run: |
