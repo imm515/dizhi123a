@@ -78,19 +78,6 @@ jobs:
         CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
         CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
 
-        # 计算文件最后更新时间距离当前时间的天数
-        get_days_since_last_update() {
-          local file="$1"
-          if [[ -f "$file" ]]; then
-            LAST_UPDATED=$(date -r "$file" +'%Y-%m-%d %H:%M:%S')
-            LAST_UPDATED_SECONDS=$(date -d "$LAST_UPDATED" +'%s')
-            DAYS_DIFF=$(( (CURRENT_TIME_SECONDS - LAST_UPDATED_SECONDS) / 86400 ))
-            echo "$DAYS_DIFF"
-          else
-            echo "文件不存在"
-          fi
-        }
-
         # 检查文件是否发生变化
         check_file_changed() {
           local file="$1"
@@ -111,10 +98,25 @@ jobs:
         DIZHI2_CHANGED=$(check_file_changed "dizhi2.txt")
         DIZHI3_CHANGED=$(check_file_changed "dizhi3.txt")
 
+        # 计算文件最后更新时间距离当前时间的天数（支持1位小数）
+        get_days_since_last_update() {
+          local file="$1"
+          if [[ -f "$file" ]]; then
+            LAST_UPDATED=$(date -r "$file" +'%Y-%m-%d %H:%M:%S')
+            LAST_UPDATED_SECONDS=$(date -d "$LAST_UPDATED" +'%s')
+            CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
+            SECONDS_DIFF=$((CURRENT_TIME_SECONDS - LAST_UPDATED_SECONDS))
+            DAYS_DIFF=$(echo "scale=1; $SECONDS_DIFF / 86400" | bc)  # 计算天数并保留1位小数
+            echo "$DAYS_DIFF"
+          else
+            echo "文件不存在"
+          fi
+        }
+        
         # 构造报告信息（材料2的逻辑）
         REPORT_INFO="%23报告 ${START_TIME_BEIJING}"
         if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
-          # 如果文件均未变化，输出距离当前时间的天数
+          # 如果文件均未变化，输出距离当前时间的天数（1位小数）
           DIZHI1_DAYS=$(get_days_since_last_update "dizhi1.txt")
           DIZHI2_DAYS=$(get_days_since_last_update "dizhi2.txt")
           DIZHI3_DAYS=$(get_days_since_last_update "dizhi3.txt")
@@ -127,17 +129,17 @@ jobs:
           [[ "$DIZHI3_CHANGED" == "true" ]] && UPDATED_FILES+=("ss")
           REPORT_INFO+="更新：$(IFS=' '; echo "${UPDATED_FILES[*]}")"
         fi
-
+        
         # 构造报告链接（材料2的逻辑）
         REPORT_LINK_2="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
-
+                
         # 构造报告链接（材料1的逻辑，完全一致）
         REPORT_LINK_1="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${{ env.START_TIME }} 耗时: ${{ env.DURATION }}"
 
         # 将两个报告链接写入 dizhiR.txt
         echo "$REPORT_LINK_1" > "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
         echo "$REPORT_LINK_2" >> "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
-
+    
     - name: Generate dizhi123.txt
       run: |
         # 拼接 dizhi1.txt、dizhi2.txt、dizhi3.txt 和 dizhiR.txt 的内容，并在每个文件内容之间添加一个空行
