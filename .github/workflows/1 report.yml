@@ -3,7 +3,7 @@ name: 1 Update Node Links with Runtime Report and Push to Target Repository
 on:
   schedule:
     - cron: '35 */6 * * *'  # 每6小时自动运行一次
-  workflow_dispatch:  # 支持手动触发
+  workflow_dispatch:        # 支持手动触发
 
 jobs:
   update-nodes:
@@ -19,142 +19,184 @@ jobs:
       id: start_time
       run: |
         echo "START_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+        echo "::debug::Start Time Recorded: ${{ env.START_TIME }}"
 
     - name: Fetch and Clean Webpage Content
       run: |
-        # 通过 secrets 获取网页地址
         VMESS_URL="${{ secrets.VMESS_URL }}"
         SS_URL="${{ secrets.SS_URL }}"
         
-        # 获取网页内容并去除 HTML 标签
+        # 添加调试信息
+        echo "::debug::Fetching VMESS content from: $VMESS_URL" >&2
         curl -s "$VMESS_URL" | sed 's/<[^>]*>//g' > webpage_content.txt
+        echo "::debug::VMESS content fetched. First line: $(head -1 webpage_content.txt)" >&2
+        
+        echo "::debug::Fetching SS content from: $SS_URL" >&2
         curl -s "$SS_URL" | sed 's/<[^>]*>//g' > ss_webpage_content.txt
-        echo "Webpage content cleaned and saved."
+        echo "::debug::SS content fetched. First line: $(head -1 ss_webpage_content.txt)" >&2
 
     - name: Fetch and Update Nodes from Content Files
       run: |
-        # 提取各类型节点，并去除首尾空白字符、替换转义字符，并排序去重
+        # 添加节点提取调试信息
+        echo "::debug::Extracting VMESS nodes..." >&2
         VMESS_NODES=$(grep -oP '.*vmess://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
+        echo "::debug::Found ${#VMESS_NODES} VMESS nodes" >&2
+        
+        echo "::debug::Extracting VLESS nodes..." >&2
         VLESS_NODES=$(grep -oP '.*vless://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
+        echo "::debug::Found ${#VLESS_NODES} VLESS nodes" >&2
         
-        # 提取 ss:// 和 ssr:// 节点，并合并到 SS_NODES
+        echo "::debug::Extracting SS nodes..." >&2
         SS_NODES=$(grep -oP '.*(ss://|ssr://)\S+' ss_webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u)
+        echo "::debug::Found ${#SS_NODES} SS/SSR nodes" >&2
         
-        # 将提取的节点数据保存到各自文件中
         echo "$VMESS_NODES" > dizhi1.txt
         echo "$VLESS_NODES" > dizhi2.txt
         echo "$SS_NODES" > dizhi3.txt
-        echo "Node data saved to files."
 
     - name: Checkout target repository
       uses: actions/checkout@v3
       with:
-        repository: ${{ secrets.TARGET_REPO }}  # 目标仓库名称由 Secrets 提供
-        token: ${{ secrets.TARGET_PAT }}         # 使用 Secrets 中的 PAT
+        repository: ${{ secrets.TARGET_REPO }}
+        token: ${{ secrets.TARGET_PAT }}
         path: target-repo
+        fetch-depth: 0  # 获取完整commit历史
 
     - name: Copy files to target repository
       run: |
-        cp dizhi1.txt dizhi2.txt dizhi3.txt ss_webpage_content.txt webpage_content.txt target-repo/${{ secrets.TARGET_FOLDER }}/
-        echo "Files copied to target repository's folder."
+        echo "::debug::Copying files to target repo..." >&2
+        cp -v dizhi*.txt ss_webpage_content.txt webpage_content.txt "target-repo/${{ secrets.TARGET_FOLDER }}/" >&2
 
     - name: Record End Time and Calculate Duration
       id: end_time
       run: |
         END_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-        START_TIME_SECONDS=$(date -d "${{ env.START_TIME }}" +'%s')
-        END_TIME_SECONDS=$(date -d "$END_TIME" +'%s')
-        DURATION=$((END_TIME_SECONDS - START_TIME_SECONDS))
-        HOURS=$((DURATION / 3600))
-        MINUTES=$(( (DURATION % 3600) / 60 ))
-        SECONDS=$((DURATION % 60))
-        printf -v FORMATTED_DURATION "%02d:%02d:%02d" $HOURS $MINUTES $SECONDS
+        START_SEC=$(date -d "${{ env.START_TIME }}" +%s)
+        END_SEC=$(date -d "$END_TIME" +%s)
+        DURATION=$((END_SEC - START_SEC))
+        FORMATTED_DURATION=$(printf "%02d:%02d:%02d" $((DURATION/3600)) $((DURATION%3600/60)) $((DURATION%60)))
         echo "END_TIME=$END_TIME" >> $GITHUB_ENV
         echo "DURATION=$FORMATTED_DURATION" >> $GITHUB_ENV
+        echo "::debug::Job Duration: $FORMATTED_DURATION" >&2
 
     - name: Append Report Link to dizhiR.txt
       run: |
-        # 获取当前时间
         CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-        CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
+        CURRENT_SEC=$(date -d "$CURRENT_TIME" +%s)
+        echo "::debug::Current Time: $CURRENT_TIME" >&2
 
-        # 计算文件最后更新时间距离当前时间的天数
-        get_days_since_last_update() {
+        # 增强调试：显示目标目录结构
+        echo "::debug::Target directory structure:" >&2
+        ls -lR "target-repo/${{ secrets.TARGET_FOLDER }}" >&2
+
+        get_last_commit() {
           local file="$1"
-          if [[ -f "$file" ]]; then
-            LAST_UPDATED=$(date -r "$file" +'%Y-%m-%d %H:%M:%S')
-            LAST_UPDATED_SECONDS=$(date -d "$LAST_UPDATED" +'%s')
-            DAYS_DIFF=$(( (CURRENT_TIME_SECONDS - LAST_UPDATED_SECONDS) / 86400 ))
-            echo "$DAYS_DIFF"
+          cd target-repo
+          local log_output=$(git log -1 --format="%cd" --date=iso -- "${{ secrets.TARGET_FOLDER }}/$file" 2>&1)
+          echo "::debug::Git log output for $file: '$log_output'" >&2
+          if [[ "$log_output" == "" ]]; then
+            cd ..
+            echo "0"
           else
-            echo "文件不存在"
+            local commit_sec=$(date -d "$log_output" +%s 2>/dev/null)
+            if [[ -z "$commit_sec" ]]; then
+              cd ..
+              echo "0"
+            else
+              cd ..
+              echo $(( (CURRENT_SEC - commit_sec) ))
+            fi
           fi
         }
 
-        # 检查文件是否发生变化
-        check_file_changed() {
+        check_diff() {
           local file="$1"
           local target_file="target-repo/${{ secrets.TARGET_FOLDER }}/$file"
           if [[ -f "$target_file" ]]; then
-            if ! diff -q "$file" "$target_file" > /dev/null; then
+            if ! diff -q "$file" "$target_file" >/dev/null; then
               echo "true"
             else
               echo "false"
             fi
           else
-            echo "true"  # 如果目标文件不存在，则认为发生了变化
+            echo "true"
           fi
         }
 
-        # 检查每个文件是否发生变化
-        DIZHI1_CHANGED=$(check_file_changed "dizhi1.txt")
-        DIZHI2_CHANGED=$(check_file_changed "dizhi2.txt")
-        DIZHI3_CHANGED=$(check_file_changed "dizhi3.txt")
+        # 检查文件差异
+        DIZHI1_CHANGED=$(check_diff "dizhi1.txt")
+        DIZHI2_CHANGED=$(check_diff "dizhi2.txt")
+        DIZHI3_CHANGED=$(check_diff "dizhi3.txt")
+        echo "::debug::File changed status - D1: $DIZHI1_CHANGED, D2: $DIZHI2_CHANGED, D3: $DIZHI3_CHANGED" >&2
 
-        # 构造报告信息（材料2的逻辑）
-        REPORT_INFO="%23报告 ${START_TIME_BEIJING}"
+        # 构造报告信息
+        REPORT_INFO="%23报告 ${{ env.START_TIME }}"
         if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
-          # 如果文件均未变化，输出距离当前时间的天数
-          DIZHI1_DAYS=$(get_days_since_last_update "dizhi1.txt")
-          DIZHI2_DAYS=$(get_days_since_last_update "dizhi2.txt")
-          DIZHI3_DAYS=$(get_days_since_last_update "dizhi3.txt")
-          REPORT_INFO+="UTD：vm:${DIZHI1_DAYS} vl:${DIZHI2_DAYS} ss:${DIZHI3_DAYS}"
+          # 获取最后commit时间（秒数）
+          D1_SEC=$(get_last_commit "dizhi1.txt")
+          D2_SEC=$(get_last_commit "dizhi2.txt")
+          D3_SEC=$(get_last_commit "dizhi3.txt")
+          
+          # 计算天数（保留一位小数）
+          D1_DAYS=$(echo "scale=1; $D1_SEC/86400" | bc -l | xargs printf "%.1f")
+          D2_DAYS=$(echo "scale=1; $D2_SEC/86400" | bc -l | xargs printf "%.1f")
+          D3_DAYS=$(echo "scale=1; $D3_SEC/86400" | bc -l | xargs printf "%.1f")
+          
+          echo "::debug::Days since last update - D1: $D1_DAYS, D2: $D2_DAYS, D3: $D3_DAYS" >&2
+          REPORT_INFO+="UTD：vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}"
         else
-          # 如果有文件变化，报告哪个文件更新了
-          UPDATED_FILES=()
-          [[ "$DIZHI1_CHANGED" == "true" ]] && UPDATED_FILES+=("vm")
-          [[ "$DIZHI2_CHANGED" == "true" ]] && UPDATED_FILES+=("vl")
-          [[ "$DIZHI3_CHANGED" == "true" ]] && UPDATED_FILES+=("ss")
-          REPORT_INFO+="更新：$(IFS=' '; echo "${UPDATED_FILES[*]}")"
+          UPDATED=()
+          [[ "$DIZHI1_CHANGED" == "true" ]] && UPDATED+=("vm")
+          [[ "$DIZHI2_CHANGED" == "true" ]] && UPDATED+=("vl")
+          [[ "$DIZHI3_CHANGED" == "true" ]] && UPDATED+=("ss")
+          REPORT_INFO+="更新：${UPDATED[*]}"
         fi
 
-        # 构造报告链接（材料2的逻辑）
-        REPORT_LINK_2="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
-
-        # 构造报告链接（材料1的逻辑，完全一致）
-        REPORT_LINK_1="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${{ env.START_TIME }} 耗时: ${{ env.DURATION }}"
-
-        # 将两个报告链接写入 dizhiR.txt
-        echo "$REPORT_LINK_1" > "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
-        echo "$REPORT_LINK_2" >> "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
+        # 生成报告链接
+        REPORT_LINK="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
+        echo "::debug::Generated Report Link: $REPORT_LINK" >&2
+        
+        # 写入报告文件
+        echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${{ env.START_TIME }} 耗时: ${{ env.DURATION }}" > target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
+        echo "$REPORT_LINK" >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
 
     - name: Generate dizhi123.txt
       run: |
-        # 拼接 dizhi1.txt、dizhi2.txt、dizhi3.txt 和 dizhiR.txt 的内容，并在每个文件内容之间添加一个空行
-        cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi1.txt > target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
-        echo "" >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
-        cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi2.txt >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
-        echo "" >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
-        cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi3.txt >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
-        echo "" >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
-        cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
-        echo "dizhi123.txt generated with content from dizhi1.txt, dizhi2.txt, dizhi3.txt, and dizhiR.txt."
+        # 添加文件存在性检查
+        for f in dizhi1.txt dizhi2.txt dizhi3.txt dizhiR.txt; do
+          if [[ ! -f "target-repo/${{ secrets.TARGET_FOLDER }}/$f" ]]; then
+            echo "::error::Missing file: $f" >&2
+            exit 1
+          fi
+        done
+        
+        # 合并文件并添加分隔符
+        {
+          cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi1.txt
+          echo -e "\n"
+          cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi2.txt
+          echo -e "\n"
+          cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi3.txt
+          echo -e "\n"
+          cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
+        } > target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
+        echo "::debug::dizhi123.txt generated successfully" >&2
 
-    - name: Commit and Push changes to target repository
+    - name: Commit and Push changes
       run: |
         cd target-repo
-        git config --global user.name "GitHub Actions"
-        git config --global user.email "actions@github.com"
+        git config --global user.name "GitHub Actions Bot"
+        git config --global user.email "github-actions-bot@users.noreply.github.com"
+        
+        # 添加详细变更日志
+        echo "::debug::Git status before commit:" >&2
+        git status --porcelain >&2
+        
         git add .
-        git commit -m "Update nodes data with runtime report and dizhi123.txt"
-        git push origin main
+        COMMIT_MESSAGE="Auto-update at ${{ env.END_TIME }}"
+        if git commit -m "$COMMIT_MESSAGE"; then
+          echo "::debug::Pushing changes..." >&2
+          git push origin main
+        else
+          echo "::debug::No changes to commit" >&2
+        fi
