@@ -78,11 +78,11 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y bc
     
-        # 获取当前时间（北京时间）
-        CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-        CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
+        # 获取当前北京时间时间戳
+        CURRENT_TIME_UTC=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+        CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME_UTC" +%s)
     
-        # 检查文件是否变更的函数
+        # 检查文件变更状态
         check_file_changed() {
           local file="$1"
           local target_file="target-repo/${{ secrets.TARGET_FOLDER }}/$file"
@@ -94,35 +94,35 @@ jobs:
               echo "false"
             fi
           else
-            echo "true"  # 目标文件不存在视为有变化
+            echo "true"
           fi
         }
     
-        # 获取目标仓库文件最后提交时间的函数
+        # 精确获取文件最后提交时间（UTC时间）
         get_last_update_days() {
           local file="$1"
           local target_path="${{ secrets.TARGET_FOLDER }}/$file"
           
-          # 获取最后提交时间
-          LAST_COMMIT_DATE=$(git -C target-repo log -1 --format="%ai" -- "$target_path" 2>/dev/null)
+          # 获取ISO 8601格式的提交时间（UTC）
+          LAST_COMMIT_UTC=$(git -C target-repo log -1 --format="%aI" -- "$target_path" 2>/dev/null)
           
-          if [[ -n "$LAST_COMMIT_DATE" ]]; then
-            # 转换为时间戳
-            LAST_UPDATED_SECONDS=$(date -d "${LAST_COMMIT_DATE%% *}" +%s 2>/dev/null)
+          if [[ -n "$LAST_COMMIT_UTC" ]]; then
+            # 转换为Unix时间戳
+            LAST_UPDATED_SECONDS=$(date -d "$LAST_COMMIT_UTC" +%s 2>/dev/null)
             
             if [[ -n "$LAST_UPDATED_SECONDS" ]]; then
-              # 计算天数差（保留1位小数）
+              # 计算精确时间差（含小数）
               DIFF_SECONDS=$((CURRENT_TIME_SECONDS - LAST_UPDATED_SECONDS))
-              echo "scale=1; $DIFF_SECONDS/86400" | bc
+              echo "scale=1; $DIFF_SECONDS/86400" | bc -l | sed 's/^\./0./;s/0*$//;s/\.$/.0/'
             else
               echo "0.0"
             fi
           else
-            echo "∞"  # 文件无提交记录
+            echo "∞"  # 无提交记录
           fi
         }
     
-        # 检查各文件变更状态
+        # 检查文件变更状态
         DIZHI1_CHANGED=$(check_file_changed "dizhi1.txt")
         DIZHI2_CHANGED=$(check_file_changed "dizhi2.txt")
         DIZHI3_CHANGED=$(check_file_changed "dizhi3.txt")
@@ -131,31 +131,29 @@ jobs:
         REPORT_INFO="%23报告 ${{ env.START_TIME }}"
         
         if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
-          # 获取各文件最后更新时间差
+          # 获取精确更新时间差
           DIZHI1_DAYS=$(get_last_update_days "dizhi1.txt")
           DIZHI2_DAYS=$(get_last_update_days "dizhi2.txt")
           DIZHI3_DAYS=$(get_last_update_days "dizhi3.txt")
           
+          # 格式化输出（处理小数点前的0）
           REPORT_INFO+=" UTD：vm:${DIZHI1_DAYS}d vl:${DIZHI2_DAYS}d ss:${DIZHI3_DAYS}d"
         else
-          # 记录更新状态
           UPDATED_FILES=()
           [[ "$DIZHI1_CHANGED" == "true" ]] && UPDATED_FILES+=("vm")
           [[ "$DIZHI2_CHANGED" == "true" ]] && UPDATED_FILES+=("vl")
           [[ "$DIZHI3_CHANGED" == "true" ]] && UPDATED_FILES+=("ss")
-          REPORT_INFO+=" 更新：$(IFS=','; echo "${UPDATED_FILES[*]}")"
+          REPORT_INFO+=" 更新：${UPDATED_FILES[*]}"
         fi
     
-        # 构建报告链接（材料2格式）
-        REPORT_LINK_2="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
-    
-        # 原始报告链接（材料1格式）
+        # 生成报告链接
         REPORT_LINK_1="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${{ env.START_TIME }} 耗时: ${{ env.DURATION }}"
+        REPORT_LINK_2="trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#${REPORT_INFO}"
     
         # 写入文件
         echo "$REPORT_LINK_1" > "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
         echo "$REPORT_LINK_2" >> "target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt"
-
+        
     - name: Generate dizhi123.txt
       run: |
         # 拼接 dizhi1.txt、dizhi2.txt、dizhi3.txt 和 dizhiR.txt 的内容，并在每个文件内容之间添加一个空行
