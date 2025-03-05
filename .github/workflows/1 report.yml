@@ -74,9 +74,9 @@ jobs:
     
     - name: Append Report Link to dizhiR.txt
       run: |
-        # 获取当前时间
-        CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-        CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
+        # 获取当前时间（北京时间）
+        CURRENT_TIME=$(TZ=Asia/Shanghai date +'%Y-%m-%d %H:%M:%S')
+        CURRENT_TIME_SECONDS=$(TZ=Asia/Shanghai date -d "$CURRENT_TIME" +'%s')
     
         # 检查文件是否发生变化
         check_file_changed() {
@@ -102,12 +102,14 @@ jobs:
         get_days_since_last_update() {
           local file="$1"
           if [[ -f "target-repo/${{ secrets.TARGET_FOLDER }}/$file" ]]; then
-            # 进入目标仓库目录获取提交时间
+            # 进入目标仓库目录获取提交时间（UTC 时间）
             cd target-repo
             LAST_UPDATED=$(git log -1 --format="%cd" --date=iso "../${{ secrets.TARGET_FOLDER }}/$file")
             cd ..
-            LAST_UPDATED_SECONDS=$(date -d "$LAST_UPDATED" +'%s')
-            CURRENT_TIME_SECONDS=$(date -d "$CURRENT_TIME" +'%s')
+            # 将 UTC 时间转换为北京时间
+            LAST_UPDATED_BEIJING=$(TZ=Asia/Shanghai date -d "$LAST_UPDATED" +'%Y-%m-%d %H:%M:%S')
+            LAST_UPDATED_SECONDS=$(TZ=Asia/Shanghai date -d "$LAST_UPDATED_BEIJING" +'%s')
+            CURRENT_TIME_SECONDS=$(TZ=Asia/Shanghai date -d "$CURRENT_TIME" +'%s')
             SECONDS_DIFF=$((CURRENT_TIME_SECONDS - LAST_UPDATED_SECONDS))
             DAYS_DIFF=$(echo "scale=1; $SECONDS_DIFF / 86400" | bc | awk '{printf "%.1f\n", $0}')
             echo "$DAYS_DIFF"
@@ -122,7 +124,7 @@ jobs:
         DIZHI3_DAYS=$(get_days_since_last_update "dizhi3.txt")
     
         # 构造报告信息
-        REPORT_INFO="%23报告 ${START_TIME_BEIJING}"
+        REPORT_INFO="%23报告 ${{ env.START_TIME }}"
         if [[ "$DIZHI1_CHANGED" == "false" && "$DIZHI2_CHANGED" == "false" && "$DIZHI3_CHANGED" == "false" ]]; then
           # 如果文件均未变化，输出距离当前时间的天数（1位小数）
           REPORT_INFO+="UTD：vm:${DIZHI1_DAYS} vl:${DIZHI2_DAYS} ss:${DIZHI3_DAYS}"
