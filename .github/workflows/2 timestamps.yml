@@ -128,7 +128,7 @@ jobs:
         get_days_diff() {
           local file_date="$1"
           local file_sec=$(date -d "$file_date" +%s)
-          echo "scale=2; ($CURRENT_SEC - $file_sec)/86400" | bc -l | xargs printf "%.2f"
+          echo "scale=1; ($CURRENT_SEC - $file_sec)/86400" | bc -l | xargs printf "%.1f"
         }
 
         D1_DAYS=$(get_days_diff "${timestamp_dates[dizhi1.txt]}")
