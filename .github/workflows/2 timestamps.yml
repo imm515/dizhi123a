@@ -142,17 +142,20 @@ jobs:
     - name: Generate dizhi123.txt
       run: |
         {
-          # 合并原有节点文件
+          # 合并原有节点文件（每个文件只输出一次）
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi1.txt
-          echo -e #"\n"
+          echo -e "\n"
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi2.txt
-          echo -e #"\n"
+          echo -e "\n"
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi3.txt
-          echo -e #"\n"
+          echo -e "\n"
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
-          echo -e #"\n"
-          # 新增：提取 myDizhi.txt 中的协议节点（支持 vmess/vless/ss/ssr）
-          grep -E '^(vmess|vless|ss|ssr)://' target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt
+          echo -e "\n"
+          
+          # 新增：安全提取 myDizhi.txt 中的节点
+          if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" ]; then
+            grep -E '^(vmess|vless|ss|ssr)://' target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt
+          fi
         } > target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
 
     - name: Commit and Push changes
