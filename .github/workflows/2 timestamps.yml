@@ -2,7 +2,7 @@ name: 2 Time
 
 on:
   schedule:
-    - cron: '35 */1 * * *'  # 每1小时自动运行一次
+    - cron: '35 */8 * * *'  # 每1小时自动运行一次
   workflow_dispatch:        # 支持手动触发
 
 jobs:
@@ -144,13 +144,13 @@ jobs:
         {
           # 合并原有节点文件（每个文件只输出一次）
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi1.txt
-          echo -e "\n"
+          echo -e
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi2.txt
-          echo -e "\n"
+          echo -e
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi3.txt
-          echo -e "\n"
+          echo -e
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
-          echo -e "\n"
+          echo -e
           
           # 新增：安全提取 myDizhi.txt 中的节点
           if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" ]; then
