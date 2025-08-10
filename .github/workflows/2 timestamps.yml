@@ -2,8 +2,12 @@ name: 2 Time
 
 on:
   schedule:
-    - cron: '35 */8 * * *'  # 每1小时自动运行一次
+    - cron: '35 */8 * * *'  # 每8小时自动运行一次
   workflow_dispatch:        # 支持手动触发
+
+permissions:
+  contents: write
+  actions: write
 
 jobs:
   update-nodes:
@@ -13,7 +17,7 @@ jobs:
 
     steps:
     - name: Checkout current repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Record Start Time
       id: start_time
@@ -43,7 +47,7 @@ jobs:
         echo "$SS_NODES" > dizhi3.txt
 
     - name: Checkout target repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: ${{ secrets.TARGET_REPO }}
         token: ${{ secrets.TARGET_PAT }}
@@ -171,3 +175,11 @@ jobs:
         else
           echo "::debug::No changes to commit"
         fi
+
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@v2
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        repository: ${{ github.repository }}
+        retain_days: 0
+        keep_minimum_runs: 2
