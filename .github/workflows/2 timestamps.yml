@@ -158,7 +158,10 @@ jobs:
           
           # 新增：安全提取 myDizhi.txt 中的节点
           if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" ]; then
-            grep -E '^(vmess|vless|ss|ssr)://' target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt
+          # --------------------------------------------------------------------------------------------------
+          # 【修改点】：在正则表达式中加入 '|trojan'
+            grep -E '^(vmess|vless|ss|ssr|trojan)://' target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt
+          # -------------------------------------------------------------------------------------------------- 
           fi
         } > target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
 
