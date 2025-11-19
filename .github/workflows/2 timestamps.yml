@@ -119,6 +119,7 @@ jobs:
           TARGET_MYDIZHI="target-repo/${TARGET_FOLDER}/myDizhi.txt"
           TARGET_MYIP="target-repo/${TARGET_FOLDER}/myIP.txt"
           OUTPUT_FILE="myDizhi_modified.txt"
+          CLEAN_FILE="myDizhi_clean.txt"
 
           # 检查文件是否存在
           if [ ! -f "$TARGET_MYDIZHI" ]; then
@@ -132,8 +133,17 @@ jobs:
             exit 0
           fi
 
+          # --- 核心修正：使用 \n 进行清洗，写在一行更安全 ---
+          # 逻辑：在 vless/vmess/trojan/ss:// 前面强制插入换行符(\n)，然后删除空行
+          echo "::debug::Cleaning myDizhi.txt format..."
+          sed 's/vless:\/\//\n&/g' "$TARGET_MYDIZHI" | \
+          sed 's/vmess:\/\//\n&/g' | \
+          sed 's/trojan:\/\//\n&/g' | \
+          sed 's/ss:\/\//\n&/g' | \
+          sed 's/ssr:\/\//\n&/g' | \
+          sed '/^[[:space:]]*$/d' > "$CLEAN_FILE"
+          
           # 2. 提取 myIP.txt 中的所有 IP:Port 到数组中
-          # 逻辑：匹配 vless://uuid@ 之后到 ? 之前的部分
           mapfile -t IP_POOL < <(grep -oP 'vless://[^@]+@\K[0-9.]+:[0-9]+' "$TARGET_MYIP")
           
           POOL_SIZE=${#IP_POOL[@]}
@@ -145,42 +155,28 @@ jobs:
              exit 0
           fi
 
-          # 3. 逐行处理 myDizhi.txt 并实现轮询替换
-          # 计数器，用于轮询 IP
+          # 3. 逐行处理 清洗后的文件 ($CLEAN_FILE)
           COUNTER=0
-          
-          # 清空输出文件
           > "$OUTPUT_FILE"
 
           while IFS= read -r line || [ -n "$line" ]; do
             # 跳过空行
-            if [ -z "$line" ]; then echo "" >> "$OUTPUT_FILE"; continue; fi
+            if [ -z "$line" ]; then continue; fi
 
             # --- 处理 VMess (JSON Base64) ---
             if [[ "$line" =~ ^vmess:// ]]; then
-              # 去掉前缀
               BASE64_STR=${line#vmess://}
-              # 解码，失败则忽略
               JSON_STR=$(echo "$BASE64_STR" | base64 -d 2>/dev/null)
               
               if [ -n "$JSON_STR" ]; then
-                # 检查 gemini (在 ps 字段或其他字段)
                 if echo "$JSON_STR" | grep -q "gemini"; then
                   echo "::debug::Skipping VMess containing gemini"
-                  # 如果你不希望保留 gemini 节点，这里什么都不做(删除)
-                  # 如果你希望保留原样，取消下面注释：
-                  # echo "$line" >> "$OUTPUT_FILE"
                 else
-                  # 获取当前轮询到的 IP 和 Port
                   CURRENT_PAIR="${IP_POOL[$((COUNTER % POOL_SIZE))]}"
                   NEW_IP=${CURRENT_PAIR%:*}
                   NEW_PORT=${CURRENT_PAIR#*:}
                   
-                  # 使用 jq 安全替换 add 和 port
-                  # -c 紧凑输出, --arg 传递变量
                   NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$NEW_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
-                  
-                  # 重新编码
                   NEW_BASE64=$(echo -n "$NEW_JSON" | base64 -w 0)
                   echo "vmess://$NEW_BASE64" >> "$OUTPUT_FILE"
                   
@@ -188,53 +184,44 @@ jobs:
                   COUNTER=$((COUNTER + 1))
                 fi
               else
-                 # 解码失败，保留原样
                  echo "$line" >> "$OUTPUT_FILE"
               fi
 
             # --- 处理 VLESS / Trojan ---
             elif [[ "$line" =~ ^(vless|trojan):// ]]; then
-              # 检查 gemini (通常在 hash # 后面)
               if echo "$line" | grep -q "gemini"; then
                  echo "::debug::Skipping VLESS/Trojan containing gemini"
               else
-                 # 使用 Bash 正则提取关键部分，避免 sed 误伤
-                 # 格式通常是 protocol://uuid@ip:port?params...
+                 # 正则提取：只取第一个匹配到的完整链接结构
                  if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
                     PROTOCOL="${BASH_REMATCH[1]}"
                     USER_INFO="${BASH_REMATCH[2]}"
-                    # OLD_IP="${BASH_REMATCH[3]}"  # 不需要
-                    # OLD_PORT="${BASH_REMATCH[4]}" # 不需要
-                    REST_PARAMS="${BASH_REMATCH[5]}"
-                    
-                    # 获取当前轮询到的 IP 和 Port
+                    REST_PARAMS="${BASH_REMATCH[5]}" # 这里的索引5是正确的
+
                     CURRENT_PAIR="${IP_POOL[$((COUNTER % POOL_SIZE))]}"
                     NEW_IP=${CURRENT_PAIR%:*}
                     NEW_PORT=${CURRENT_PAIR#*:}
 
-                    # 重新组合字符串
                     NEW_LINE="${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}"
                     echo "$NEW_LINE" >> "$OUTPUT_FILE"
                     
                     echo "::debug::${PROTOCOL} Updated -> IP: $NEW_IP, Port: $NEW_PORT"
                     COUNTER=$((COUNTER + 1))
                  else
-                    # 格式不匹配，保留原样
                     echo "$line" >> "$OUTPUT_FILE"
                  fi
               fi
 
-            # --- 其他行 (如 ss:// 或 注释) ---
+            # --- 其他行 ---
             else
-              # 如果包含 gemini，根据你的逻辑是否保留，这里假设保留非节点的行
               echo "$line" >> "$OUTPUT_FILE"
             fi
 
-          done < "$TARGET_MYDIZHI"
+          done < "$CLEAN_FILE"
 
           # 4. 覆盖原文件
           cp "$OUTPUT_FILE" "$TARGET_MYDIZHI"
-          echo "::debug::Success! Processed myDizhi.txt with round-robin IP replacement."
+          echo "::debug::Success! Processed and Cleaned myDizhi.txt"
 
     - name: Record End Time and Calculate Duration
       id: end_time
