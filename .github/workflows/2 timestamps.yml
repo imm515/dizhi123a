@@ -19,6 +19,11 @@ jobs:
     - name: Checkout current repository
       uses: actions/checkout@v4
 
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq
+    
     - name: Record Start Time
       id: start_time
       run: |
@@ -99,7 +104,10 @@ jobs:
         done
 
         # 生成新的时间戳文件
-        printf "dizhi1.txt:%s\ndizhi2.txt:%s\ndizhi3.txt:%s\n" \
+        printf "dizhi1.txt:%s
+dizhi2.txt:%s
+dizhi3.txt:%s
+" \
           "${timestamps[dizhi1.txt]}" \
           "${timestamps[dizhi2.txt]}" \
           "${timestamps[dizhi3.txt]}" > timestamp.txt
@@ -119,7 +127,6 @@ jobs:
           TARGET_MYDIZHI="target-repo/${TARGET_FOLDER}/myDizhi.txt"
           TARGET_MYIP="target-repo/${TARGET_FOLDER}/myIP.txt"
           OUTPUT_FILE="myDizhi_modified.txt"
-          CLEAN_FILE="myDizhi_clean.txt"
 
           # 检查文件是否存在
           if [ ! -f "$TARGET_MYDIZHI" ]; then
@@ -133,16 +140,6 @@ jobs:
             exit 0
           fi
 
-          # --- 核心修正：使用 \n 进行清洗，写在一行更安全 ---
-          # 逻辑：在 vless/vmess/trojan/ss:// 前面强制插入换行符(\n)，然后删除空行
-          echo "::debug::Cleaning myDizhi.txt format..."
-          sed 's/vless:\/\//\n&/g' "$TARGET_MYDIZHI" | \
-          sed 's/vmess:\/\//\n&/g' | \
-          sed 's/trojan:\/\//\n&/g' | \
-          sed 's/ss:\/\//\n&/g' | \
-          sed 's/ssr:\/\//\n&/g' | \
-          sed '/^[[:space:]]*$/d' > "$CLEAN_FILE"
-          
           # 2. 提取 myIP.txt 中的所有 IP:Port 到数组中
           mapfile -t IP_POOL < <(grep -oP 'vless://[^@]+@\K[0-9.]+:[0-9]+' "$TARGET_MYIP")
           
@@ -155,14 +152,15 @@ jobs:
              exit 0
           fi
 
-          # 3. 逐行处理 清洗后的文件 ($CLEAN_FILE)
+          # 3. 直接提取并处理有效节点，忽略其他内容
           COUNTER=0
           > "$OUTPUT_FILE"
-
-          while IFS= read -r line || [ -n "$line" ]; do
-            # 跳过空行
-            if [ -z "$line" ]; then continue; fi
-
+          
+          # 先提取所有节点到临时文件，避免子shell问题
+          grep -E '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" > /tmp/nodes.txt
+          
+          # 处理每个节点
+          while IFS= read -r line; do
             # --- 处理 VMess (JSON Base64) ---
             if [[ "$line" =~ ^vmess:// ]]; then
               BASE64_STR=${line#vmess://}
@@ -196,12 +194,12 @@ jobs:
                  if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
                     PROTOCOL="${BASH_REMATCH[1]}"
                     USER_INFO="${BASH_REMATCH[2]}"
-                    REST_PARAMS="${BASH_REMATCH[5]}" # 这里的索引5是正确的
+                    REST_PARAMS="${BASH_REMATCH[5]}"  # 修正索引，确保正确获取参数
 
                     CURRENT_PAIR="${IP_POOL[$((COUNTER % POOL_SIZE))]}"
                     NEW_IP=${CURRENT_PAIR%:*}
                     NEW_PORT=${CURRENT_PAIR#*:}
-
+                    
                     NEW_LINE="${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}"
                     echo "$NEW_LINE" >> "$OUTPUT_FILE"
                     
@@ -217,11 +215,14 @@ jobs:
               echo "$line" >> "$OUTPUT_FILE"
             fi
 
-          done < "$CLEAN_FILE"
+          done < /tmp/nodes.txt
 
-          # 4. 覆盖原文件
+          # 4. 添加非节点内容（注释、配置等）
+          grep -vE '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" >> "$OUTPUT_FILE"
+          
+          # 5. 覆盖原文件
           cp "$OUTPUT_FILE" "$TARGET_MYDIZHI"
-          echo "::debug::Success! Processed and Cleaned myDizhi.txt"
+          echo "::debug::Success! Processed myDizhi.txt with IP/Port replacement"
 
     - name: Record End Time and Calculate Duration
       id: end_time
