@@ -105,9 +105,9 @@ jobs:
 
         # 生成新的时间戳文件
         printf "dizhi1.txt:%s
-dizhi2.txt:%s
-dizhi3.txt:%s
-" \
+          dizhi2.txt:%s
+          dizhi3.txt:%s
+          " \
           "${timestamps[dizhi1.txt]}" \
           "${timestamps[dizhi2.txt]}" \
           "${timestamps[dizhi3.txt]}" > timestamp.txt
