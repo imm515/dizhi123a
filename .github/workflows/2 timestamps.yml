@@ -104,10 +104,10 @@ jobs:
         done
 
         # 生成新的时间戳文件
-          printf "dizhi1.txt:%s
-          dizhi2.txt:%s
-          dizhi3.txt:%s
-        " \
+        printf "dizhi1.txt:%s
+dizhi2.txt:%s
+dizhi3.txt:%s
+" \
           "${timestamps[dizhi1.txt]}" \
           "${timestamps[dizhi2.txt]}" \
           "${timestamps[dizhi3.txt]}" > timestamp.txt
@@ -220,9 +220,12 @@ jobs:
           # 4. 添加非节点内容（注释、配置等）
           grep -vE '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" >> "$OUTPUT_FILE"
           
-          # 5. 覆盖原文件
-          cp "$OUTPUT_FILE" "$TARGET_MYDIZHI"
+          # 5. 保留原文件，输出到新文件
+          # 复制处理后的文件到目标目录，但不覆盖原文件
+          cp "$OUTPUT_FILE" "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi_modified.txt"
           echo "::debug::Success! Processed myDizhi.txt with IP/Port replacement"
+          echo "::debug::Original file preserved at: $TARGET_MYDIZHI"
+          echo "::debug::Modified file saved at: target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi_modified.txt"
 
     - name: Record End Time and Calculate Duration
       id: end_time
@@ -269,6 +272,11 @@ jobs:
           echo -e
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi3.txt
           echo -e
+          # 添加处理后的 myDizhi 节点（包含 IP 替换）
+          if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi_modified.txt" ]; then
+            grep -E '^(vless|vmess|trojan)://' "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi_modified.txt"
+            echo -e
+          fi
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
           echo -e
           
