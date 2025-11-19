@@ -13,7 +13,7 @@ jobs:
   update-nodes:
     runs-on: ubuntu-latest
     env:
-      TZ: Asia/Shanghai  # 使用北京时间
+      TZ: Asia/Shanghai   # 使用北京时间
 
     steps:
     - name: Checkout current repository
@@ -114,46 +114,68 @@ jobs:
 
     - name: Process myDizhi.txt with IP/Port Replacement
       run: |
-        if [ ! -f "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" ]; then
+        # 定义变量以便路径访问更清晰、更安全
+        TARGET_FOLDER="${{ secrets.TARGET_FOLDER }}"
+        TARGET_MYDIZHI="target-repo/${TARGET_FOLDER}/myDizhi.txt"
+        TARGET_MYIP="target-repo/${TARGET_FOLDER}/myIP.txt"
+
+        if [ ! -f "$TARGET_MYDIZHI" ]; then
           echo "::debug::myDizhi.txt not found, skipping IP/port replacement"
           exit 0
         fi
         
         # 复制原文件进行修改
-        cp "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" myDizhi_modified.txt
+        cp "$TARGET_MYDIZHI" myDizhi_modified.txt
+        
+        # 定义一个函数，用于安全地转义字符串，作为 sed 的字面搜索模式
+        # 解决了链接中包含特殊字符导致 sed 失败的问题
+        safe_escape_for_sed() {
+          printf '%s\n' "$1" | sed 's/[][\/.^$*|]/\\&/g'
+        }
         
         # 检查是否存在myIP.txt并提取IP和端口
-        if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/myIP.txt" ]; then
+        if [ -f "$TARGET_MYIP" ]; then
           # 从myIP.txt提取IP和端口
-          MY_INFO=$(grep -oP 'vless://[^@]+@\K[0-9.]+:[0-9]+' "target-repo/${{ secrets.TARGET_FOLDER }}/myIP.txt")
+          MY_INFO=$(grep -oP 'vless://[^@]+@\K[0-9.]+:[0-9]+' "$TARGET_MYIP")
           if [ ! -z "$MY_INFO" ]; then
             TARGET_IP=$(echo "$MY_INFO" | cut -d':' -f1)
             TARGET_PORT=$(echo "$MY_INFO" | cut -d':' -f2)
             echo "::debug::Extracted IP: $TARGET_IP, Port: $TARGET_PORT"
             
-            # 处理vless链接（排除包含gemini的）
+            # --- VLESS Processing ---
+            # 在 done 后添加 || true，防止 grep 无匹配时脚本退出
             grep -E 'vless://.*$' myDizhi_modified.txt | grep -v 'gemini' | while read line; do
               if [[ $line =~ vless://[^@]+@([0-9.]+):([0-9]+) ]]; then
                 OLD_IP="${BASH_REMATCH[1]}"
                 OLD_PORT="${BASH_REMATCH[2]}"
                 NEW_LINE=$(echo "$line" | sed "s/$OLD_IP:$OLD_PORT/$TARGET_IP:$TARGET_PORT/g")
-                sed -i "s|$line|$NEW_LINE|g" myDizhi_modified.txt
+                
+                ESCAPED_LINE=$(safe_escape_for_sed "$line")
+                
+                # 使用转义后的行进行替换
+                sed -i "s|$ESCAPED_LINE|$NEW_LINE|g" myDizhi_modified.txt
                 echo "::debug::Updated vless line: $OLD_IP:$OLD_PORT -> $TARGET_IP:$TARGET_PORT"
               fi
-            done
-            
-            # 处理trojan链接（排除包含gemini的）
+            done || true # FIX: 允许管道在无匹配时失败
+
+            # --- TROJAN Processing ---
+            # 在 done 后添加 || true，防止 grep 无匹配时脚本退出
             grep -E 'trojan://[^@]+@([0-9.]+):([0-9]+)' myDizhi_modified.txt | grep -v 'gemini' | while read line; do
               if [[ $line =~ trojan://[^@]+@([0-9.]+):([0-9]+) ]]; then
                 OLD_IP="${BASH_REMATCH[1]}"
                 OLD_PORT="${BASH_REMATCH[2]}"
                 NEW_LINE=$(echo "$line" | sed "s/$OLD_IP:$OLD_PORT/$TARGET_IP:$TARGET_PORT/g")
-                sed -i "s|$line|$NEW_LINE|g" myDizhi_modified.txt
+                
+                ESCAPED_LINE=$(safe_escape_for_sed "$line")
+                
+                # 使用转义后的行进行替换
+                sed -i "s|$ESCAPED_LINE|$NEW_LINE|g" myDizhi_modified.txt
                 echo "::debug::Updated trojan line: $OLD_IP:$OLD_PORT -> $TARGET_IP:$TARGET_PORT"
               fi
-            done
+            done || true # FIX: 允许管道在无匹配时失败
             
-            # 处理vmess链接（先解码，再检查是否包含gemini）
+            # --- VMESS Processing ---
+            # 在 done 后添加 || true，防止 grep 无匹配时脚本退出
             grep -E 'vmess://.*$' myDizhi_modified.txt | while read line; do
               # 解码base64
               DECODED=$(echo "$line" | sed 's/vmess:\/\///' | base64 -d 2>/dev/null)
@@ -169,14 +191,18 @@ jobs:
                     # 重新编码
                     ENCODED=$(echo "$MODIFIED_DECODED" | base64 -w 0)
                     NEW_LINE="vmess://$ENCODED"
-                    sed -i "s|$line|$NEW_LINE|g" myDizhi_modified.txt
+                    
+                    ESCAPED_LINE=$(safe_escape_for_sed "$line")
+                    
+                    # 使用转义后的行进行替换
+                    sed -i "s|$ESCAPED_LINE|$NEW_LINE|g" myDizhi_modified.txt
                     echo "::debug::Updated vmess line: $OLD_IP:$OLD_PORT -> $TARGET_IP:$TARGET_PORT"
                   fi
                 else
                   echo "::debug::Skipping vmess line containing gemini keyword"
                 fi
               fi
-            done
+            done || true # FIX: 允许管道在无匹配时失败
           else
             echo "::debug::Could not extract IP/port from myIP.txt"
           fi
@@ -185,7 +211,7 @@ jobs:
         fi
         
         # 将修改后的文件复制回目标目录
-        cp myDizhi_modified.txt "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt"
+        cp myDizhi_modified.txt "$TARGET_MYDIZHI"
         echo "::debug::Updated myDizhi.txt with new IP/port values"
 
     - name: Record End Time and Calculate Duration
@@ -242,6 +268,7 @@ jobs:
             
             # 处理非vmess协议（vless, ss, ssr, trojan）- 直接过滤排除包含gemini的
             grep -E '^(vless|ss|ssr|trojan)://' "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" | grep -v 'gemini'
+            echo -e # 添加换行
             
             # 处理vmess协议 - 先解码再检查是否包含gemini
             grep -E '^vmess://' "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" | while read line; do
@@ -252,7 +279,8 @@ jobs:
                   echo "$line"
                 fi
               fi
-            done
+            done || true # FIX: 允许管道在无匹配时失败
+            
             echo "::debug::Extracted nodes from modified myDizhi.txt (excluding gemini nodes)"
           fi
         } > target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
