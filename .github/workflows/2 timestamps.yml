@@ -280,24 +280,13 @@ jobs:
           cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
           echo -e
           
-          # 新增：安全提取修改后的myDizhi.txt中的节点
+          # 新增：添加原始myDizhi.txt中的所有节点（包括gemini节点）
           if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" ]; then
             echo "::debug::Processing updated myDizhi.txt"
             
-            # 处理非vmess协议（vless, ss, ssr, trojan）- 直接过滤排除包含gemini的
-            grep -E '^(vless|ss|ssr|trojan)://' "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" | grep -v 'gemini'
-            
-            # 处理vmess协议 - 先解码再检查是否包含gemini
-            grep -E '^vmess://' "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" | while read line; do
-              DECODED=$(echo "$line" | sed 's/vmess:\/\///' | base64 -d 2>/dev/null)
-              if [ ! -z "$DECODED" ]; then
-                # 检查解码后是否包含gemini关键字
-                if ! echo "$DECODED" | grep -q "gemini"; then
-                  echo "$line"
-                fi
-              fi
-            done
-            echo "::debug::Extracted nodes from modified myDizhi.txt (excluding gemini nodes)"
+            # 添加所有节点，包括gemini节点，不进行过滤
+            grep -E '^(vless|vmess|trojan|ss|ssr)://' "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt"
+            echo "::debug::Extracted all nodes from modified myDizhi.txt (including gemini nodes)"
           fi
         } > target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
 
