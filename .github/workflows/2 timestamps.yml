@@ -122,186 +122,136 @@ jobs:
 
     - name: Process myDizhi.txt with IP/Port Replacement
       run: |
-          # 1. 定义路径
-          TARGET_FOLDER="${{ secrets.TARGET_FOLDER }}"
-          TARGET_MYDIZHI="target-repo/${TARGET_FOLDER}/myDizhi.txt"
-          TARGET_MYIP="target-repo/${TARGET_FOLDER}/myIP.txt"
-          OUTPUT_FILE="myDizhi_modified.txt"
+        # 1. 定义路径
+        TARGET_FOLDER="${{ secrets.TARGET_FOLDER }}"
+        TARGET_MYDIZHI="target-repo/${TARGET_FOLDER}/myDizhi.txt"
+        TARGET_MYIP="target-repo/${TARGET_FOLDER}/myIP.txt"
+        OUTPUT_FILE="myDizhi_modified.txt"
 
-          # 检查文件是否存在
-          if [ ! -f "$TARGET_MYDIZHI" ]; then
-            echo "::debug::myDizhi.txt not found, skipping."
-            exit 0
-          fi
+        # 检查文件是否存在
+        if [ ! -f "$TARGET_MYDIZHI" ]; then
+          echo "::debug::myDizhi.txt not found, skipping."
+          exit 0
+        fi
 
-          if [ ! -f "$TARGET_MYIP" ]; then
-            echo "::debug::myIP.txt not found, skipping replacement."
-            cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"
-            exit 0
-          fi
+        if [ ! -f "$TARGET_MYIP" ]; then
+          echo "::debug::myIP.txt not found, skipping replacement."
+          cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"
+          exit 0
+        fi
 
-          # 2. 提取 myIP.txt 中的所有 IP:Port，分离普通IP和gemini IP
-          echo "::debug::Separating normal and gemini IPs..."
-          
-          # 提取所有IP并记录完整的vless链接用于判断gemini
-          grep -o 'vless://[^\s]*' "$TARGET_MYIP" > /tmp/all_vless_links.txt
-          
-          # 创建普通IP池（不含gemini）
-          grep -v "gemini" /tmp/all_vless_links.txt | grep -oP '@\K[0-9.]+:[0-9]+' > /tmp/normal_ips.txt
-          mapfile -t NORMAL_IP_POOL < /tmp/normal_ips.txt
-          
-          # 创建gemini IP池（含gemini）
-          grep "gemini" /tmp/all_vless_links.txt | grep -oP '@\K[0-9.]+:[0-9]+' > /tmp/gemini_ips.txt
-          mapfile -t GEMINI_IP_POOL < /tmp/gemini_ips.txt
-          
-          # 统计IP池大小
-          NORMAL_POOL_SIZE=${#NORMAL_IP_POOL[@]}
-          GEMINI_POOL_SIZE=${#GEMINI_IP_POOL[@]}
-          echo "::debug::Found $NORMAL_POOL_SIZE normal IPs and $GEMINI_POOL_SIZE gemini IPs in myIP.txt"
-          
-          # 如果普通IP池为空，保留原节点
-          if [ "$NORMAL_POOL_SIZE" -eq 0 ]; then
-             echo "::debug::No valid normal IPs found in myIP.txt, keeping original."
-             cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"
-             exit 0
-          fi
+        # 2. 提取 myIP.txt 中的所有 IP:Port，分离普通IP和gemini IP
+        mapfile -t NORMAL_IP_POOL < <(grep -v "gemini" "$TARGET_MYIP" | grep -oP '@\K[0-9.]+:[0-9]+')
+        mapfile -t GEMINI_IP_POOL < <(grep "gemini" "$TARGET_MYIP" | grep -oP '@\K[0-9.]+:[0-9]+')
 
-          # 3. 初始化计数器
-          NORMAL_COUNTER=0
-          GEMINI_COUNTER=0
-          > "$OUTPUT_FILE"
-          
-          # 先提取所有节点到临时文件，避免子shell问题
-          grep -E '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" > /tmp/nodes.txt
-          
-          # 统计处理节点数量
-          NORMAL_NODES_PROCESSED=0
-          GEMINI_NODES_PROCESSED=0
-          GEMINI_NODES_SKIPPED=0
-          
-          # 处理每个节点
-          while IFS= read -r line; do
-            # --- 处理 VMess (JSON Base64) ---
-            if [[ "$line" =~ ^vmess:// ]]; then
-              BASE64_STR=${line#vmess://}
-              JSON_STR=$(echo "$BASE64_STR" | base64 -d 2>/dev/null)
-              
-              if [ -n "$JSON_STR" ]; then
-                # 检查是否包含gemini标记
-                if echo "$JSON_STR" | grep -q "gemini"; then
-                  # 处理gemini节点
-                  if [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
-                    CURRENT_PAIR="${GEMINI_IP_POOL[$((GEMINI_COUNTER % GEMINI_POOL_SIZE))]}"
-                    NEW_IP=${CURRENT_PAIR%:*}
-                    NEW_PORT=${CURRENT_PAIR#*:}
-                    
-                    NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$NEW_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
-                    NEW_BASE64=$(echo -n "$NEW_JSON" | base64 -w 0)
-                    echo "vmess://$NEW_BASE64" >> "$OUTPUT_FILE"
-                    
-                    echo "::debug::Gemini VMess Updated -> IP: $NEW_IP, Port: $NEW_PORT"
-                    GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
-                    GEMINI_NODES_PROCESSED=$((GEMINI_NODES_PROCESSED + 1))
-                  else
-                    # gemini IP池为空，跳过节点
-                    echo "::debug::Skipping Gemini VMess - no gemini IPs available"
-                    GEMINI_NODES_SKIPPED=$((GEMINI_NODES_SKIPPED + 1))
-                  fi
-                else
-                  # 处理普通节点
-                  CURRENT_PAIR="${NORMAL_IP_POOL[$((NORMAL_COUNTER % NORMAL_POOL_SIZE))]}"
+        NORMAL_POOL_SIZE=${#NORMAL_IP_POOL[@]}
+        GEMINI_POOL_SIZE=${#GEMINI_IP_POOL[@]}
+        echo "::debug::Found $NORMAL_POOL_SIZE normal IPs and $GEMINI_POOL_SIZE gemini IPs in myIP.txt"
+
+        if [ "$NORMAL_POOL_SIZE" -eq 0 ]; then
+          echo "::debug::No valid normal IPs found in myIP.txt, keeping original."
+          cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"
+          exit 0
+        fi
+
+        # 3. 初始化计数器
+        NORMAL_COUNTER=0
+        GEMINI_COUNTER=0
+        > "$OUTPUT_FILE"
+
+        # 提取节点到临时文件
+        grep -E '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" > /tmp/nodes.txt
+
+        # 处理每个节点
+        while IFS= read -r line; do
+
+          # --- VMess ---
+          if [[ "$line" =~ ^vmess:// ]]; then
+            BASE64_STR=${line#vmess://}
+            JSON_STR=$(echo "$BASE64_STR" | base64 -d 2>/dev/null || echo "")
+
+            if [[ -n "$JSON_STR" && $(echo "$JSON_STR" | jq empty 2>/dev/null) ]]; then
+              if echo "$JSON_STR" | grep -q "gemini"; then
+                if [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
+                  CURRENT_PAIR="${GEMINI_IP_POOL[$((GEMINI_COUNTER % GEMINI_POOL_SIZE))]}"
                   NEW_IP=${CURRENT_PAIR%:*}
                   NEW_PORT=${CURRENT_PAIR#*:}
-                  
                   NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$NEW_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
                   NEW_BASE64=$(echo -n "$NEW_JSON" | base64 -w 0)
                   echo "vmess://$NEW_BASE64" >> "$OUTPUT_FILE"
-                  
-                  echo "::debug::Normal VMess Updated -> IP: $NEW_IP, Port: $NEW_PORT"
-                  NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
-                  NORMAL_NODES_PROCESSED=$((NORMAL_NODES_PROCESSED + 1))
+                  echo "::debug::Gemini VMess Updated -> IP: $NEW_IP, Port: $NEW_PORT"
+                  GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
+                else
+                  echo "::debug::Skipping Gemini VMess - no gemini IPs available"
+                  echo "$line" >> "$OUTPUT_FILE"
                 fi
               else
-                 echo "$line" >> "$OUTPUT_FILE"
+                CURRENT_PAIR="${NORMAL_IP_POOL[$((NORMAL_COUNTER % NORMAL_POOL_SIZE))]}"
+                NEW_IP=${CURRENT_PAIR%:*}
+                NEW_PORT=${CURRENT_PAIR#*:}
+                NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$NEW_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
+                NEW_BASE64=$(echo -n "$NEW_JSON" | base64 -w 0)
+                echo "vmess://$NEW_BASE64" >> "$OUTPUT_FILE"
+                echo "::debug::Normal VMess Updated -> IP: $NEW_IP, Port: $NEW_PORT"
+                NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
               fi
-
-            # --- 处理 VLESS / Trojan ---
-            elif [[ "$line" =~ ^(vless|trojan):// ]]; then
-              # 检查是否包含gemini标记
-              if echo "$line" | grep -q "gemini"; then
-                # 处理gemini节点
-                if [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
-                  # 正则提取：只取第一个匹配到的完整链接结构
-                  if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
-                     PROTOCOL="${BASH_REMATCH[1]}"
-                     USER_INFO="${BASH_REMATCH[2]}"
-                     REST_PARAMS="${BASH_REMATCH[5]}"  # 修正索引，确保正确获取参数
-
-                     CURRENT_PAIR="${GEMINI_IP_POOL[$((GEMINI_COUNTER % GEMINI_POOL_SIZE))]}"
-                     NEW_IP=${CURRENT_PAIR%:*}
-                     NEW_PORT=${CURRENT_PAIR#*:}
-                     
-                     NEW_LINE="${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}"
-                     echo "$NEW_LINE" >> "$OUTPUT_FILE"
-                     
-                     echo "::debug::Gemini ${PROTOCOL} Updated -> IP: $NEW_IP, Port: $NEW_PORT"
-                     GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
-                     GEMINI_NODES_PROCESSED=$((GEMINI_NODES_PROCESSED + 1))
-                  else
-                     echo "$line" >> "$OUTPUT_FILE"
-                  fi
-                else
-                  # gemini IP池为空，跳过节点
-                  echo "::debug::Skipping Gemini ${BASH_REMATCH[1]} - no gemini IPs available"
-                  GEMINI_NODES_SKIPPED=$((GEMINI_NODES_SKIPPED + 1))
-                fi
-              else
-                # 处理普通节点
-                # 正则提取：只取第一个匹配到的完整链接结构
-                if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
-                   PROTOCOL="${BASH_REMATCH[1]}"
-                   USER_INFO="${BASH_REMATCH[2]}"
-                   REST_PARAMS="${BASH_REMATCH[5]}"  # 修正索引，确保正确获取参数
-
-                   CURRENT_PAIR="${NORMAL_IP_POOL[$((NORMAL_COUNTER % NORMAL_POOL_SIZE))]}"
-                   NEW_IP=${CURRENT_PAIR%:*}
-                   NEW_PORT=${CURRENT_PAIR#*:}
-                   
-                   NEW_LINE="${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}"
-                   echo "$NEW_LINE" >> "$OUTPUT_FILE"
-                   
-                   echo "::debug::Normal ${PROTOCOL} Updated -> IP: $NEW_IP, Port: $NEW_PORT"
-                   NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
-                   NORMAL_NODES_PROCESSED=$((NORMAL_NODES_PROCESSED + 1))
-                else
-                   echo "$line" >> "$OUTPUT_FILE"
-                fi
-              fi
-
-            # --- 其他行 ---
             else
               echo "$line" >> "$OUTPUT_FILE"
             fi
 
-          done < /tmp/nodes.txt
+          # --- VLESS / Trojan ---
+          elif [[ "$line" =~ ^(vless|trojan):// ]]; then
+            if echo "$line" | grep -q "gemini"; then
+              if [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
+                if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
+                  PROTOCOL="${BASH_REMATCH[1]}"
+                  USER_INFO="${BASH_REMATCH[2]}"
+                  REST_PARAMS="${BASH_REMATCH[5]}"
+                  CURRENT_PAIR="${GEMINI_IP_POOL[$((GEMINI_COUNTER % GEMINI_POOL_SIZE))]}"
+                  NEW_IP=${CURRENT_PAIR%:*}
+                  NEW_PORT=${CURRENT_PAIR#*:}
+                  echo "${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}" >> "$OUTPUT_FILE"
+                  echo "::debug::Gemini ${PROTOCOL} Updated -> IP: $NEW_IP, Port: $NEW_PORT"
+                  GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
+                else
+                  echo "$line" >> "$OUTPUT_FILE"
+                fi
+              else
+                echo "::debug::Skipping Gemini ${line%%:*} - no gemini IPs available"
+                echo "$line" >> "$OUTPUT_FILE"
+              fi
+            else
+              if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
+                PROTOCOL="${BASH_REMATCH[1]}"
+                USER_INFO="${BASH_REMATCH[2]}"
+                REST_PARAMS="${BASH_REMATCH[5]}"
+                CURRENT_PAIR="${NORMAL_IP_POOL[$((NORMAL_COUNTER % NORMAL_POOL_SIZE))]}"
+                NEW_IP=${CURRENT_PAIR%:*}
+                NEW_PORT=${CURRENT_PAIR#*:}
+                echo "${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}" >> "$OUTPUT_FILE"
+                echo "::debug::Normal ${PROTOCOL} Updated -> IP: $NEW_IP, Port: $NEW_PORT"
+                NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
+              else
+                echo "$line" >> "$OUTPUT_FILE"
+              fi
+            fi
 
-          # 4. 添加非节点内容（注释、配置等）
-          grep -vE '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" >> "$OUTPUT_FILE"
-          
-          # 5. 保留原文件，输出到新文件
-          # 复制处理后的文件到目标目录，但不覆盖原文件
-          cp "$OUTPUT_FILE" "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi_modified.txt"
-          
-          # 6. 输出处理统计
-          echo "::debug::IP Replacement Summary:"
-          echo "::debug::Normal IPs available: $NORMAL_POOL_SIZE"
-          echo "::debug::Gemini IPs available: $GEMINI_POOL_SIZE"
-          echo "::debug::Normal nodes processed: $NORMAL_NODES_PROCESSED"
-          echo "::debug::Gemini nodes processed: $GEMINI_NODES_PROCESSED"
-          echo "::debug::Gemini nodes skipped (no gemini IPs): $GEMINI_NODES_SKIPPED"
-          echo "::debug::Success! Processed myDizhi.txt with IP/Port replacement"
-          echo "::debug::Original file preserved at: $TARGET_MYDIZHI"
-          echo "::debug::Modified file saved at: target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi_modified.txt"
+          else
+            echo "$line" >> "$OUTPUT_FILE"
+          fi
+
+        done < /tmp/nodes.txt
+
+        # 4. 添加非节点内容
+        grep -vE '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" >> "$OUTPUT_FILE"
+
+        # 5. 确保输出目录存在并保存
+        mkdir -p "target-repo/${TARGET_FOLDER}"
+        cp "$OUTPUT_FILE" "target-repo/${TARGET_FOLDER}/myDizhi_modified.txt"
+
+        echo "::debug::Success! Processed myDizhi.txt with IP/Port replacement"
+        echo "::debug::Original file preserved at: $TARGET_MYDIZHI"
+        echo "::debug::Modified file saved at: target-repo/${TARGET_FOLDER}/myDizhi_modified.txt"
 
     - name: Record End Time and Calculate Duration
       id: end_time
