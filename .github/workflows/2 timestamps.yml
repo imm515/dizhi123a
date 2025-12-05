@@ -120,7 +120,7 @@ jobs:
           cp -v "target-repo/${{ secrets.TARGET_FOLDER }}/myIP.txt" ./
         fi
 
-- name: Process myDizhi.txt with IP/Port Replacement (DEBUG VERSION)
+    - name: Process myDizhi.txt with IP/Port Replacement (DEBUG VERSION)
       run: |
         # 1. 定义路径和检查文件
         TARGET_FOLDER="${{ secrets.TARGET_FOLDER }}"
