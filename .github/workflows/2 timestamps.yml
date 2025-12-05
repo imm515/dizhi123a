@@ -120,142 +120,169 @@ jobs:
           cp -v "target-repo/${{ secrets.TARGET_FOLDER }}/myIP.txt" ./
         fi
 
-    - name: Process myDizhi.txt with IP/Port Replacement
+- name: Process myDizhi.txt with IP/Port Replacement (DEBUG VERSION)
       run: |
-        # 1. 定义路径
+        # 1. 定义路径和检查文件
         TARGET_FOLDER="${{ secrets.TARGET_FOLDER }}"
         TARGET_MYDIZHI="target-repo/${TARGET_FOLDER}/myDizhi.txt"
         TARGET_MYIP="target-repo/${TARGET_FOLDER}/myIP.txt"
         OUTPUT_FILE="myDizhi_modified.txt"
 
-        # 检查文件是否存在
         if [ ! -f "$TARGET_MYDIZHI" ]; then
-          echo "::debug::myDizhi.txt not found, skipping."
+          echo "::error::myDizhi.txt not found at $TARGET_MYDIZHI, skipping."
           exit 0
         fi
 
         if [ ! -f "$TARGET_MYIP" ]; then
-          echo "::debug::myIP.txt not found, skipping replacement."
+          echo "::error::myIP.txt not found, skipping replacement. File copied directly to output."
           cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"
           exit 0
         fi
 
-        # 2. 提取 myIP.txt 中的所有 IP:Port，分离普通IP和gemini IP
+        # 2. 提取 IP 池
         mapfile -t NORMAL_IP_POOL < <(grep -v "gemini" "$TARGET_MYIP" | grep -oP '@\K[0-9.]+:[0-9]+')
         mapfile -t GEMINI_IP_POOL < <(grep "gemini" "$TARGET_MYIP" | grep -oP '@\K[0-9.]+:[0-9]+')
 
         NORMAL_POOL_SIZE=${#NORMAL_IP_POOL[@]}
         GEMINI_POOL_SIZE=${#GEMINI_IP_POOL[@]}
-        echo "::debug::Found $NORMAL_POOL_SIZE normal IPs and $GEMINI_POOL_SIZE gemini IPs in myIP.txt"
+        echo "::debug::IP Pool Check: Found $NORMAL_POOL_SIZE normal IPs and $GEMINI_POOL_SIZE gemini IPs."
 
         if [ "$NORMAL_POOL_SIZE" -eq 0 ]; then
-          echo "::debug::No valid normal IPs found in myIP.txt, keeping original."
+          echo "::error::No valid normal IPs found in myIP.txt, keeping original."
           cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"
           exit 0
         fi
 
-        # 3. 初始化计数器
+        # 3. 初始化
         NORMAL_COUNTER=0
         GEMINI_COUNTER=0
         > "$OUTPUT_FILE"
-
-        # 提取节点到临时文件
         grep -E '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" > /tmp/nodes.txt
-
-        # 处理每个节点
-        while IFS= read -r line; do
         
-          # 【这里是新增的代码】
-            # 必须去除 Windows 换行符 (\r)，否则 base64 解码会失败，正则匹配也会出错
-            line=$(echo "$line" | tr -d '\r')
+        echo "::debug::Starting node processing loop..."
 
-          # --- VMess ---
+        # 4. 处理每个节点 (重点调试区域)
+        while IFS= read -r line; do
+          LINE_NUM=$((LINE_NUM+1))
+          
+          # 必须去除 Windows 换行符 (\r)，同时确保行尾没有多余的空白
+          # 使用 sed 's/^[[:space:]]*//;s/[[:space:]]*$//' 清理首尾空白
+          line=$(echo "$line" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          
+          echo "::debug::--- Line $LINE_NUM: Start ---"
+          echo "::debug::Line content (cleaned): ${line:0:100}..."
+
+          # --- VMess 节点处理 ---
           if [[ "$line" =~ ^vmess:// ]]; then
             BASE64_STR=${line#vmess://}
-            JSON_STR=$(echo "$BASE64_STR" | base64 -d 2>/dev/null || echo "")
+            
+            # 增强 Base64 清理：去除所有可能的空格、回车、换行，确保字符串是纯净的
+            CLEAN_BASE64_STR=$(echo "$BASE64_STR" | tr -d '\r\n\t ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
-            if [[ -n "$JSON_STR" && $(echo "$JSON_STR" | jq empty 2>/dev/null) ]]; then
+            echo "::debug::VMess Node found. BASE64_STR (cleaned): ${CLEAN_BASE64_STR:0:40}..."
+            
+            # 尝试解码，并捕获错误
+            JSON_STR=$(echo "$CLEAN_BASE64_STR" | base64 -d 2>/dev/null || echo "")
+
+            if [ -z "$JSON_STR" ]; then
+              echo "::error::Line $LINE_NUM: VMess BASE64 解码**失败**！请检查原始 Base64 字符串是否完整或包含非法字符。"
+              echo "$line" >> "$OUTPUT_FILE"
+              continue # 跳过当前行
+            fi
+
+            # 检查 JSON 格式
+            if echo "$JSON_STR" | jq empty 2>/dev/null; then
+              echo "::debug::Line $LINE_NUM: VMess BASE64 解码和 JSON 解析**成功**。JSON内容: ${JSON_STR:0:80}..."
+              
+              # --- IP 替换逻辑开始 ---
               if echo "$JSON_STR" | grep -q "gemini"; then
+                # Gemini 节点逻辑
                 if [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
                   CURRENT_PAIR="${GEMINI_IP_POOL[$((GEMINI_COUNTER % GEMINI_POOL_SIZE))]}"
                   NEW_IP=${CURRENT_PAIR%:*}
                   NEW_PORT=${CURRENT_PAIR#*:}
+                  
+                  # 替换 IP/Port 并重新编码
                   NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$NEW_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
                   NEW_BASE64=$(echo -n "$NEW_JSON" | base64 -w 0)
+                  
                   echo "vmess://$NEW_BASE64" >> "$OUTPUT_FILE"
-                  echo "::debug::Gemini VMess Updated -> IP: $NEW_IP, Port: $NEW_PORT"
+                  echo "::debug::Line $LINE_NUM: **Gemini VMess Updated** -> IP: $NEW_IP, Port: $NEW_PORT"
                   GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
                 else
-                  echo "::debug::Skipping Gemini VMess - no gemini IPs available"
+                  echo "::debug::Line $LINE_NUM: Skipping Gemini VMess - no gemini IPs available"
                   echo "$line" >> "$OUTPUT_FILE"
                 fi
               else
+                # 普通节点逻辑
                 CURRENT_PAIR="${NORMAL_IP_POOL[$((NORMAL_COUNTER % NORMAL_POOL_SIZE))]}"
                 NEW_IP=${CURRENT_PAIR%:*}
                 NEW_PORT=${CURRENT_PAIR#*:}
+                
+                # 替换 IP/Port 并重新编码
                 NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$NEW_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
                 NEW_BASE64=$(echo -n "$NEW_JSON" | base64 -w 0)
+                
                 echo "vmess://$NEW_BASE64" >> "$OUTPUT_FILE"
-                echo "::debug::Normal VMess Updated -> IP: $NEW_IP, Port: $NEW_PORT"
+                echo "::debug::Line $LINE_NUM: **Normal VMess Updated** -> IP: $NEW_IP, Port: $NEW_PORT"
                 NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
               fi
+              # --- IP 替换逻辑结束 ---
+
             else
+              echo "::error::Line $LINE_NUM: VMess JSON 解析**失败**！解码后的内容非有效 JSON。JSON: ${JSON_STR:0:80}..."
               echo "$line" >> "$OUTPUT_FILE"
             fi
 
-          # --- VLESS / Trojan ---
+          # --- VLESS / Trojan 逻辑 (仅保留，未修改) ---
           elif [[ "$line" =~ ^(vless|trojan):// ]]; then
+            PROTOCOL="${BASH_REMATCH[1]}"
             if echo "$line" | grep -q "gemini"; then
-              if [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
-                if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
-                  PROTOCOL="${BASH_REMATCH[1]}"
-                  USER_INFO="${BASH_REMATCH[2]}"
-                  REST_PARAMS="${BASH_REMATCH[5]}"
-                  CURRENT_PAIR="${GEMINI_IP_POOL[$((GEMINI_COUNTER % GEMINI_POOL_SIZE))]}"
-                  NEW_IP=${CURRENT_PAIR%:*}
-                  NEW_PORT=${CURRENT_PAIR#*:}
-                  echo "${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}" >> "$OUTPUT_FILE"
-                  echo "::debug::Gemini ${PROTOCOL} Updated -> IP: $NEW_IP, Port: $NEW_PORT"
-                  GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
-                else
-                  echo "$line" >> "$OUTPUT_FILE"
-                fi
+              if [ "$GEMINI_POOL_SIZE" -gt 0 ] && [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
+                # (Gemini VLESS/Trojan 替换逻辑)
+                USER_INFO="${BASH_REMATCH[2]}"
+                REST_PARAMS="${BASH_REMATCH[5]}"
+                CURRENT_PAIR="${GEMINI_IP_POOL[$((GEMINI_COUNTER % GEMINI_POOL_SIZE))]}"
+                NEW_IP=${CURRENT_PAIR%:*}
+                NEW_PORT=${CURRENT_PAIR#*:}
+                echo "${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}" >> "$OUTPUT_FILE"
+                echo "::debug::Line $LINE_NUM: **Gemini ${PROTOCOL} Updated** -> IP: $NEW_IP, Port: $NEW_PORT"
+                GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
               else
-                echo "::debug::Skipping Gemini ${line%%:*} - no gemini IPs available"
+                echo "::debug::Line $LINE_NUM: Skipping Gemini ${PROTOCOL} - No IPs or regex failed"
                 echo "$line" >> "$OUTPUT_FILE"
               fi
             else
               if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
-                PROTOCOL="${BASH_REMATCH[1]}"
+                # (Normal VLESS/Trojan 替换逻辑)
                 USER_INFO="${BASH_REMATCH[2]}"
                 REST_PARAMS="${BASH_REMATCH[5]}"
                 CURRENT_PAIR="${NORMAL_IP_POOL[$((NORMAL_COUNTER % NORMAL_POOL_SIZE))]}"
                 NEW_IP=${CURRENT_PAIR%:*}
                 NEW_PORT=${CURRENT_PAIR#*:}
                 echo "${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}" >> "$OUTPUT_FILE"
-                echo "::debug::Normal ${PROTOCOL} Updated -> IP: $NEW_IP, Port: $NEW_PORT"
+                echo "::debug::Line $LINE_NUM: **Normal ${PROTOCOL} Updated** -> IP: $NEW_IP, Port: $NEW_PORT"
                 NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
               else
+                echo "::debug::Line $LINE_NUM: Skipping Normal ${PROTOCOL} - Regex failed"
                 echo "$line" >> "$OUTPUT_FILE"
               fi
             fi
 
+          # --- 其他内容 (原样输出) ---
           else
+            echo "::debug::Line $LINE_NUM: Not a V/T/VM node, keeping original line."
             echo "$line" >> "$OUTPUT_FILE"
           fi
+          echo "::debug::--- Line $LINE_NUM: End ---"
 
         done < /tmp/nodes.txt
-
-        # 4. 添加非节点内容
+        
+        # 5. 添加非节点内容和保存
         grep -vE '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" >> "$OUTPUT_FILE"
-
-        # 5. 确保输出目录存在并保存
         mkdir -p "target-repo/${TARGET_FOLDER}"
         cp "$OUTPUT_FILE" "target-repo/${TARGET_FOLDER}/myDizhi_modified.txt"
-
         echo "::debug::Success! Processed myDizhi.txt with IP/Port replacement"
-        echo "::debug::Original file preserved at: $TARGET_MYDIZHI"
-        echo "::debug::Modified file saved at: target-repo/${TARGET_FOLDER}/myDizhi_modified.txt"
 
     - name: Record End Time and Calculate Duration
       id: end_time
