@@ -164,6 +164,10 @@ jobs:
 
         # 处理每个节点
         while IFS= read -r line; do
+        
+          # 【这里是新增的代码】
+            # 必须去除 Windows 换行符 (\r)，否则 base64 解码会失败，正则匹配也会出错
+            line=$(echo "$line" | tr -d '\r')
 
           # --- VMess ---
           if [[ "$line" =~ ^vmess:// ]]; then
