@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       vless_count:
-        description: 'Number of IPv6 VLESS nodes to generate (max 6).'
+        description: 'Number of IPv6 VLESS nodes to generate per group (Should be 6).'
         required: false
         default: '6'
         type: string
@@ -27,7 +27,7 @@ jobs:
       TZ: Asia/Shanghai
       # 沿用 2.yml 的 secrets 配置
       TARGET_FOLDER: ${{ secrets.TARGET_FOLDER }}
-      # 目标生成数量，默认为 6
+      # 目标生成数量（每组），默认为 6
       VLESS_COUNT: ${{ github.event.inputs.vless_count || '6' }}
 
     steps:
@@ -70,7 +70,6 @@ jobs:
           fi
 
           # 提取第一个 VLESS 节点作为模板（排除注释行）
-          # 使用 '|| true' 确保 grep 没找到时不会中断脚本
           VLESS_TEMPLATE=$(grep -m 1 '^vless://' "$MYDIZHI_FILE" || true) 
           if [ -z "$VLESS_TEMPLATE" ]; then
             echo "::error::No VLESS node found in myDizhi.txt. Exiting."
@@ -93,20 +92,18 @@ jobs:
           VLESS_TEMPLATE = os.environ['VLESS_TEMPLATE']
           MYIPV6_FILE = os.environ['MYIPV6_FILE']
           OUTPUT_MOD_FILE = os.environ['OUTPUT_MOD_FILE']
-          # 使用 .get() 方式获取，并提供默认值
-          VLESS_COUNT = int(os.environ.get('VLESS_COUNT','6')) 
+          # VLESS_COUNT 现在代表每个分组需要生成的节点数量
+          VLESS_COUNT = int(os.environ.get('VLESS_COUNT', '6')) 
 
-          # 端口列表
+          # 端口列表，用于生成 6 个节点
           PORTS = [443, 2053, 2083, 2087, 2096, 8443]
 
           # 解析 VLESS 模板
           def parse_vless(url):
               try:
-                  # VLESS URL 格式: vless://UUID@Address:Port?Params#Name
                   match = re.match(r'vless://([^@]+)@([^:]+):(\d+)([^#]*)#?(.*)', url)
                   if match:
                       uuid = match.group(1)
-                      # Address, Port, Params, Name
                       name = match.group(5) or "" # 确保 name 至少是空字符串
                       
                       # 使用 temp_url 确保 urlparse 能正确处理 query 部分
@@ -123,101 +120,148 @@ jobs:
                   print(f"::error::parse_vless error: {e}")
               return None
 
-          # 读取 IPv6 地址池 (取最新的前 N 个)
-          def get_ipv6_pool(file_path, limit):
-              ips = []
+          # 读取 IPv6 地址池，并按 Source 分组返回
+          def get_ipv6_groups(file_path):
+              """读取文件并返回分组的 IPv6 地址列表，格式为 [{'source': name, 'ips': [ip1, ip2, ...]}, ...]"""
+              all_groups = []
+              current_group_ips = []
+              # 默认名称，用于处理文件开头可能存在的 IP (尽管在您的格式中不太可能)
+              current_source_name = "UNGROUPED_IPV6" 
+              # 匹配分组头，并捕获 Source 名称
+              group_start_pattern = re.compile(r'^# === Source: ([^ ]+).*?===')
+
               try:
                   with open(file_path, 'r', encoding='utf-8') as f:
                       for line in f:
-                          # 跳过空行、注释行和报头行
-                          if not line.strip() or line.strip().startswith('#') or 'IPv6 | Time | Source' in line:
+                          line = line.strip()
+                          if not line:
                               continue
-                          
-                          parts = line.split('|')
-                          ip = parts[0].strip()
-                          
-                          if ':' in ip:
-                              # 剥离可能存在的方括号 (尽管在源文件 myIPv6.txt 中可能没有)
-                              if ip.startswith('[') and ip.endswith(']'):
-                                  ip = ip.strip('[]')
-                              ips.append(ip)
-                          
-                          if len(ips) >= limit:
-                              break
+
+                          # 1. 检查分组开始标记
+                          match_group = group_start_pattern.match(line)
+                          if match_group:
+                              # 保存前一个分组 (如果有 IP)
+                              if current_group_ips:
+                                  all_groups.append({'source': current_source_name, 'ips': current_group_ips})
+                              
+                              # 开始新分组
+                              current_source_name = match_group.group(1).strip()
+                              current_group_ips = []
+                              continue
+
+                          # 2. 检查 IP 数据行 (需要包含 IPv6 地址和 |)
+                          # 匹配 IPv6 地址，可能是缩写或完整形式，且后面有 |
+                          if re.match(r'^(?:[0-9a-fA-F:]+|\[[0-9a-fA-F:]+\])\s*\|', line):
+                              parts = line.split('|')
+                              ip = parts[0].strip().strip('[]') # 剥离 IP 和可能的方括号
+                              
+                              if ':' in ip:
+                                  current_group_ips.append(ip)
+
+                  # 3. 添加最后一个分组
+                  if current_group_ips:
+                      all_groups.append({'source': current_source_name, 'ips': current_group_ips})
+                      
               except Exception as e:
-                  print(f"::error::get_ipv6_pool failed: {e}")
-              return ips
+                  print(f"::error::get_ipv6_groups failed: {e}")
+                  return []
+              
+              return all_groups
 
           # 生成新节点
-          def generate_nodes(template_data, ipv6_pool, count):
+          def generate_nodes(template_data, ipv6_groups, count_per_group):
+              """为每个 IP 分组生成指定数量的 VLESS 节点。"""
               nodes = []
-              if not template_data or not ipv6_pool:
+              total_generated = 0
+              
+              if not template_data or not ipv6_groups:
                   return nodes
                   
-              # 确保生成的节点数量不超过目标数量且不超过可用端口数量
-              num_to_generate = min(count, len(PORTS))
+              # 确保生成的节点数量不超过可用端口数量
+              num_to_generate = min(count_per_group, len(PORTS))
               
-              for i in range(num_to_generate):
-                  # 循环获取 IPv6 地址，实现“如果不够，则用有的循环”
-                  ip = ipv6_pool[i % len(ipv6_pool)]
-                  port = PORTS[i]
+              for group_data in ipv6_groups:
+                  ip_group = group_data['ips']
+                  source = group_data['source']
                   
-                  # 编码节点名称，VLESS URI 规范要求 #Name 部分必须编码
-                  name_encoded = template_data['name'].replace(' ', '%20')
-                  
-                  # 拼接 URL 的参数部分，如果存在参数，则以 ? 开头
-                  params_suffix = f"?{template_data['clean_params']}" if template_data['clean_params'] else ""
-                  
-                  # IPv6 地址在 VLESS URI 的 host 部分必须用方括号包围
-                  ip_with_brackets = f"[{ip}]"
-                  
-                  new_url = (
-                      f"vless://{template_data['uuid']}@{ip_with_brackets}:{port}"
-                      f"{params_suffix}"
-                      f"#{name_encoded}_IPv6_{port}"
-                  )
-                  nodes.append(new_url)
-                  
+                  if not ip_group:
+                      print(f"::warning::Skipping empty group: {source}")
+                      continue
+
+                  for i in range(num_to_generate):
+                      # 循环获取 IPv6 地址，确保凑够 6 个节点
+                      ip = ip_group[i % len(ip_group)]
+                      port = PORTS[i]
+                      
+                      # 1. 解码原始节点名称
+                      original_name = unquote(template_data['name'])
+                      
+                      # 2. 构造新的节点名称: [原名] | [Source] | [Port]
+                      new_name = f"{original_name} | {source} | {port}"
+                      # VLESS URI 规范要求 #Name 部分必须进行 URL 编码（这里使用 %20 替换空格，实际 URL 库已处理）
+                      name_encoded = new_name.replace(' ', '%20')
+
+                      # 3. 拼接参数和地址
+                      params_suffix = f"?{template_data['clean_params']}" if template_data['clean_params'] else ""
+                      ip_with_brackets = f"[{ip}]" # IPv6 地址必须用方括号包围
+                      
+                      new_url = (
+                          f"vless://{template_data['uuid']}@{ip_with_brackets}:{port}"
+                          f"{params_suffix}"
+                          f"#{name_encoded}"
+                      )
+                      nodes.append(new_url)
+                      total_generated += 1
+                      
+              print(f"::debug::Total nodes generated across all groups: {total_generated}")
               return nodes
 
           # --- Main Execution ---
           template = parse_vless(VLESS_TEMPLATE)
-          ipv6s = get_ipv6_pool(MYIPV6_FILE, VLESS_COUNT)
-
-          if len(ipv6s) < VLESS_COUNT:
-              print(f"::warning::Only {len(ipv6s)} IPv6 addresses found. Will cycle addresses if necessary.")
-
-          generated = generate_nodes(template, ipv6s, VLESS_COUNT)
+          ipv6_groups = get_ipv6_groups(MYIPV6_FILE)
+          total_groups = len(ipv6_groups)
+          
+          if not ipv6_groups:
+              print("::error::No IPv6 groups found or file format is incorrect. Exiting.")
+              generated = []
+          else:
+              print(f"::notice::Found {total_groups} IPv6 groups. Generating {VLESS_COUNT} nodes per group.")
+              generated = generate_nodes(template, ipv6_groups, VLESS_COUNT)
 
           # 写入生成的文件
           with open(OUTPUT_MOD_FILE, 'w', encoding='utf-8') as fh:
               for n in generated:
                   fh.write(n + '\n')
 
-          print(f"::notice::Generated {len(generated)} nodes into {OUTPUT_MOD_FILE}")
+          # 写入总节点数 (注意，这里是总节点数，不再是每组的节点数)
+          ipv6_total_count = len(generated)
+          print(f"::notice::Generated {ipv6_total_count} total nodes into {OUTPUT_MOD_FILE}")
 
           # 向 GITHUB_OUTPUT 输出两个参数，供后续 step 使用 steps.node_gen.outputs.*
           gout = os.environ.get('GITHUB_OUTPUT')
           if gout:
               with open(gout, 'a') as gf:
-                  gf.write(f"ipv6_count={len(generated)}\n")
+                  # 输出总节点数，用于 Commit Message
+                  gf.write(f"ipv6_count={ipv6_total_count}\n") 
                   gf.write(f"modified_file_path={OUTPUT_MOD_FILE}\n")
           PY
 
       - name: Update dizhi123.txt with New IPv6 Nodes
-        if: steps.node_gen.outputs.ipv6_count != '0'
+        # 即使总节点数为 0 (0 * N=0)，也需要运行以清理旧的 IPv6 块
+        # if: steps.node_gen.outputs.ipv6_count != '0' # 移除这个限制
         run: |
           set -euo pipefail
 
           # 从 GITHUB_OUTPUT 获取路径和数量，确保使用正确的目录
           DIZHI123_FILE="target-repo/${{ env.TARGET_FOLDER }}/dizhi123.txt"
           MOD_FILE="${{ steps.node_gen.outputs.modified_file_path }}"
+          # 注意：这里的 IPV6_COUNT 是生成的总节点数
           IPV6_COUNT="${{ steps.node_gen.outputs.ipv6_count }}"
 
           # 确保 MOD_FILE 存在 (它应该在 target-repo 目录内)
           if [ -z "$MOD_FILE" ] || [ ! -f "$MOD_FILE" ]; then
             echo "::error::Modified file not found: $MOD_FILE"
-            exit 1
+            # 即使文件不存在，清理操作仍应尝试运行，但这里可以跳过生成新块
           fi
 
           # 确保 dizhi123 存在，如果不存在则创建
@@ -228,49 +272,49 @@ jobs:
           fi
 
           CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-          START_MARKER="--- 新增${IPV6_COUNT}个端口IPv6 (GMT+8: ${CURRENT_TIME}) ---"
-          END_MARKER="--------------------------------------------------"
-
-          # 生成新块到临时文件
-          {
-            echo "$START_MARKER"
-            cat "$MOD_FILE"
-            echo "$END_MARKER"
-          } > /tmp/new_ipv6_block.txt
+          START_MARKER="--- 新增${IPV6_COUNT}个分组端口IPv6总节点 (GMT+8: ${CURRENT_TIME}) ---"
+          END_MARKER="------------------------------------------------------------------" # 加长分隔线以提高唯一性
 
           # 使用 perl 进行稳健的块删除操作
-          perl -0777 -pe 's/--- 新增.*?个端口IPv6.*?--------------------------------------------------\n?//s' "$DIZHI123_FILE" > /tmp/dizhi123_stripped.txt || true
-
-          # 现在把新块和被清理后的内容合并为最终文件 (新块始终在顶部)
-          cat /tmp/new_ipv6_block.txt /tmp/dizhi123_stripped.txt > /tmp/dizhi123_new.txt
-          mv /tmp/dizhi123_new.txt "$DIZHI123_FILE"
-
-          echo "::notice::dizhi123.txt updated (prepended new IPv6 block)."
+          # 匹配范围：从 "--- 新增" 开始，到 "--------------------------------------------------" 结束
+          perl -0777 -pe 's/--- 新增.*?个分组端口IPv6总节点.*?------------------------------------------------------------------\n?//s' "$DIZHI123_FILE" > /tmp/dizhi123_stripped.txt || true
+          
+          # 如果有新节点生成，则生成新块并合并
+          if [ "$IPV6_COUNT" -gt 0 ]; then
+            # 生成新块到临时文件
+            {
+              echo "$START_MARKER"
+              cat "$MOD_FILE"
+              echo "$END_MARKER"
+            } > /tmp/new_ipv6_block.txt
+            
+            # 现在把新块和被清理后的内容合并为最终文件 (新块始终在顶部)
+            cat /tmp/new_ipv6_block.txt /tmp/dizhi123_stripped.txt > /tmp/dizhi123_new.txt
+            mv /tmp/dizhi123_new.txt "$DIZHI123_FILE"
+            echo "::notice::dizhi123.txt updated (prepended new IPv6 block with $IPV6_COUNT nodes)."
+          else
+            # 如果没有生成节点，仅保留清理后的 dizhi123.txt
+            mv /tmp/dizhi123_stripped.txt "$DIZHI123_FILE"
+            echo "::notice::No IPv6 nodes generated. Old IPv6 block was successfully removed."
+          fi
 
       - name: Commit and Push changes manually
         run: |
           set -euo pipefail
 
-          # 1. 切换到目标仓库的根目录
           cd target-repo
           
-          # 2. 配置 Git 用户信息（与 action 保持一致）
           git config user.name "GitHub Actions Bot"
           git config user.email "github-actions-bot@users.noreply.github.com"
           
-          # 3. 目标文件路径（相对于 target-repo 目录）
           FILE_PATH="${{ env.TARGET_FOLDER }}/dizhi123.txt"
           
-          # 4. 添加文件到暂存区
           git add "$FILE_PATH"
           
-          # 5. 检查是否有需要提交的更改并提交
-          # 使用 git diff --cached --quiet 检查暂存区是否有 HEAD 不同的内容
           if ! git diff --cached --quiet --exit-code; then
               echo "Committing changes to $FILE_PATH..."
-              # 提交
-              git commit -m "Auto-update: Inserted ${{ steps.node_gen.outputs.ipv6_count }} new IPv6 VLESS nodes into dizhi123.txt"
-              # 推送 (利用 actions/checkout 设置的 PAT)
+              # 提交信息使用总节点数
+              git commit -m "Auto-update: Inserted ${{ steps.node_gen.outputs.ipv6_count }} grouped IPv6 VLESS nodes into dizhi123.txt"
               git push
               echo "::notice::Successfully committed and pushed changes."
           else
