@@ -254,12 +254,11 @@ jobs:
       - name: Commit and Push changes
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          # 使用 2.yml 中使用的 TARGET_REPO/TARGET_PAT 进行推送
-          repository: ${{ secrets.TARGET_REPO }}
-          token: ${{ secrets.TARGET_PAT }}
+          # 修复：设置工作目录到 target-repo，让 action 在正确的本地仓库中执行 git 命令
+          working_directory: target-repo 
           commit_message: "Auto-update: Inserted ${{ steps.node_gen.outputs.ipv6_count }} new IPv6 VLESS nodes into dizhi123.txt"
           commit_user_name: GitHub Actions Bot
           commit_user_email: github-actions-bot@users.noreply.github.com
-          # 仅提交 dizhi123.txt 文件
-          file_pattern: 'target-repo/${{ env.TARGET_FOLDER }}/dizhi123.txt'
+          # 文件模式相对于 working_directory (即 target-repo)
+          file_pattern: '${{ env.TARGET_FOLDER }}/dizhi123.txt'
           push_options: '--force-with-lease'
