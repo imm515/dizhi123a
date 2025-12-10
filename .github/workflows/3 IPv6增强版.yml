@@ -2,6 +2,14 @@ name: 3 IPv6 Source Fetcher (Enhanced)
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["2 Time"]
+    types:
+      - completed
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   fetch_and_sync_ipv6:
