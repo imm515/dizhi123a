@@ -239,10 +239,6 @@ jobs:
           } > /tmp/new_ipv6_block.txt
 
           # 使用 perl 进行稳健的块删除操作
-          # perl -0777: 启用 slurp mode (读取整个文件)
-          # -pe: 循环处理输入文件，并打印结果
-          # s/...//s: s (substitution) /s (dotall 模式，让 . 匹配换行)
-          # 这会删除 dizhi123.txt 中第一个匹配到的 [START_MARKER]...[END_MARKER] 块
           perl -0777 -pe 's/--- 新增.*?个端口IPv6.*?--------------------------------------------------\n?//s' "$DIZHI123_FILE" > /tmp/dizhi123_stripped.txt || true
 
           # 现在把新块和被清理后的内容合并为最终文件 (新块始终在顶部)
@@ -251,14 +247,32 @@ jobs:
 
           echo "::notice::dizhi123.txt updated (prepended new IPv6 block)."
 
-      - name: Commit and Push changes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          # 修复：设置工作目录到 target-repo，让 action 在正确的本地仓库中执行 git 命令
-          working_directory: target-repo 
-          commit_message: "Auto-update: Inserted ${{ steps.node_gen.outputs.ipv6_count }} new IPv6 VLESS nodes into dizhi123.txt"
-          commit_user_name: GitHub Actions Bot
-          commit_user_email: github-actions-bot@users.noreply.github.com
-          # 文件模式相对于 working_directory (即 target-repo)
-          file_pattern: '${{ env.TARGET_FOLDER }}/dizhi123.txt'
-          push_options: '--force-with-lease'
+      - name: Commit and Push changes manually
+        run: |
+          set -euo pipefail
+
+          # 1. 切换到目标仓库的根目录
+          cd target-repo
+          
+          # 2. 配置 Git 用户信息（与 action 保持一致）
+          git config user.name "GitHub Actions Bot"
+          git config user.email "github-actions-bot@users.noreply.github.com"
+          
+          # 3. 目标文件路径（相对于 target-repo 目录）
+          FILE_PATH="${{ env.TARGET_FOLDER }}/dizhi123.txt"
+          
+          # 4. 添加文件到暂存区
+          git add "$FILE_PATH"
+          
+          # 5. 检查是否有需要提交的更改并提交
+          # 使用 git diff --cached --quiet 检查暂存区是否有 HEAD 不同的内容
+          if ! git diff --cached --quiet --exit-code; then
+              echo "Committing changes to $FILE_PATH..."
+              # 提交
+              git commit -m "Auto-update: Inserted ${{ steps.node_gen.outputs.ipv6_count }} new IPv6 VLESS nodes into dizhi123.txt"
+              # 推送 (利用 actions/checkout 设置的 PAT)
+              git push
+              echo "::notice::Successfully committed and pushed changes."
+          else
+              echo "No changes detected in $FILE_PATH. Skipping commit."
+          fi
