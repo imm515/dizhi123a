@@ -379,28 +379,28 @@ steps:
       print(f"Done. Total merged: {total_found}. Kept top {len(kept_items)}. Saved to {myfile}")
       PY
 
-      # 5. 提交变更 (优化后的 Git 逻辑)
-      git add "${TARGET_FOLDER}" || true
+    # 5. 提交变更 (优化后的 Git 逻辑)
+    git add "${TARGET_FOLDER}" || true
 
-      # 检查是否有实际的变更
-      if git diff-index --quiet HEAD --; then
-        echo "No changes detected in the target folder. Skipping commit/push."
+    # 检查是否有实际的变更
+    if git diff-index --quiet HEAD --; then
+      echo "No changes detected in the target folder. Skipping commit/push."
+    else
+      # 修复 2: 使用 GITHUB_WORKSPACE 绝对路径引用提交信息文件
+      COMMIT_FILE="${GITHUB_WORKSPACE}/final_commit_message.txt" 
+      
+      # 检查当前分支名
+      CURRENT_BRANCH=$(git symbolic-ref --short HEAD)
+
+      if git commit -F "$COMMIT_FILE"; then
+        echo "Commit success. Pushing to origin/${CURRENT_BRANCH}..."
+        # 推送到当前分支
+        git push origin "$CURRENT_BRANCH"
       else
-        # 修复 2: 使用 GITHUB_WORKSPACE 绝对路径引用提交信息文件
-        COMMIT_FILE="${GITHUB_WORKSPACE}/final_commit_message.txt" 
-        
-        # 检查当前分支名
-        CURRENT_BRANCH=$(git symbolic-ref --short HEAD)
-
-        if git commit -F "$COMMIT_FILE"; then
-          echo "Commit success. Pushing to origin/${CURRENT_BRANCH}..."
-          # 推送到当前分支
-          git push origin "$CURRENT_BRANCH"
-        else
-          # 理论上不应该到达这里，除非发生重大错误
-          echo "::warning::Git commit failed but files were changed. Check logs."
-        fi
+        # 理论上不应该到达这里，除非发生重大错误
+        echo "::warning::Git commit failed but files were changed. Check logs."
       fi
+    fi
 
   - name: ✅ Done
     run: echo "IPv6 fetch and aggregation complete."
