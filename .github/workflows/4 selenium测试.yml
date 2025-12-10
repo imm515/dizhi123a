@@ -1,4 +1,4 @@
-name: 3 IPv6 Source Fetcher (Enhanced)
+name: 4 Selenium Test IPv6
 
 on:
   workflow_dispatch:
@@ -79,7 +79,8 @@ jobs:
           URL_LIST = os.environ.get('URL_LIST', '').strip()
           TARGET_DIR = Path('./ipv6_fetch_temp')
           COMMIT_DETAILS_BODY_FILE = Path("commit_details_body.txt")
-          COMMIT_MESSAGE_FILE = Path("final_commit_message.txt")
+          # final_commit_message.txt 写入仓库根目录
+          COMMIT_MESSAGE_FILE = Path("final_commit_message.txt") 
           GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT')
           
           if not URL_LIST:
@@ -214,7 +215,8 @@ jobs:
           # 2. 克隆目标仓库
           git clone --single-branch "$TARGET_URL_WITH_PAT" target_repo_sync
           cd target_repo_sync
-          git checkout -b main || git checkout main # 确保在主分支上操作
+          # 修复 1: 优先切换到 main，不存在时再创建 main
+          git checkout main || git checkout -b main # 确保在主分支上操作 
 
           mkdir -p "${TARGET_FOLDER}"
           git config core.fileMode false
@@ -393,8 +395,8 @@ jobs:
           if git diff-index --quiet HEAD --; then
               echo "No changes detected in the target folder. Skipping commit/push."
           else
-              # 准备提交信息文件
-              COMMIT_FILE="../../final_commit_message.txt" 
+              # 修复 2: 使用 GITHUB_WORKSPACE 绝对路径引用提交信息文件
+              COMMIT_FILE="${GITHUB_WORKSPACE}/final_commit_message.txt" 
               
               # 检查当前分支名
               CURRENT_BRANCH=$(git symbolic-ref --short HEAD)
