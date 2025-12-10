@@ -81,7 +81,7 @@ jobs:
           TARGET_DIR = Path('./ipv6_fetch_temp')
           COMMIT_DETAILS_BODY_FILE = Path("commit_details_body.txt")
           COMMIT_MESSAGE_FILE = Path("final_commit_message.txt")
-          GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT')  # runner 提供的文件路径
+          GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT') # runner 提供的文件路径
           
           if not URL_LIST:
               print("WARNING: IPV6_SOURCE_URLS is empty. Skipping fetch operation.")
