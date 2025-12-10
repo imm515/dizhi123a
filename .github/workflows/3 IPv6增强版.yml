@@ -44,8 +44,9 @@ jobs:
           mapfile -t URLs <<< "$URL_LIST_CLEANED"
           COUNT=0
 
-          # 定义一个更像浏览器的 User-Agent 字符串，有助于绕过 Cloudflare 等系统的简单机器人检测。
-          USER_AGENT_HEADER="-A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'"
+          # 定义更完整的自定义 User-Agent、Accept 和 Accept-Language 头部，
+          # 以最大限度地模拟浏览器行为，应对更严格的机器人检测 (如 Cloudflare)。
+          CURL_CUSTOM_ARGS="-A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' -H 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7' -H 'Accept-Language: zh-CN,zh;q=0.9,en;q=0.8'"
 
           for URL in "${URLs[@]}"; do
             URL=$(echo "$URL" | tr -d '[:space:]')
@@ -56,8 +57,8 @@ jobs:
             FILENAME="${TARGET_DIR}/v6_source_${HOSTNAME}.txt"
             echo "--- Processing URL: $URL ---"
             
-            # 使用 -s (静默模式), -L (跟随重定向) 和自定义 User-Agent
-            if curl -s -L $USER_AGENT_HEADER "$URL" > "$FILENAME"; then
+            # 使用 -s (静默模式), -L (跟随重定向) 和完整的自定义头部参数
+            if curl -s -L $CURL_CUSTOM_ARGS "$URL" > "$FILENAME"; then
               echo "" >> "$FILENAME"
               LINES=$(wc -l < "$FILENAME" || echo 0)
               if [ "$LINES" -gt 0 ]; then
