@@ -206,11 +206,12 @@ jobs:
           # 复制新抓取的文件
           cp -f ../${TEMP_DIR}/*.txt "./${TARGET_FOLDER}/" || true
 
-          # 生成并更新 myIPv6.txt（聚合逻辑）
-          echo "Running IPv6 aggregation script..."
+          # 生成并更新 myIPv6.txt（聚合逻辑 - 已修改为平均分配和分组）
+          echo "Running IPv6 aggregation script (Fair Distribution)..."
           python3 - <<'PY'
           import os, sys, re, ipaddress, datetime
           from pathlib import Path
+          from collections import defaultdict
 
           try:
               # 引入 dateutil.tz 用于时区处理
@@ -242,7 +243,9 @@ jobs:
           target_dir.mkdir(parents=True, exist_ok=True)
 
           myfile = target_dir / 'myIPv6.txt'
-          ip_map = {} # key=IP (canonical form), value=(datetime_obj (Shanghai naive), source)
+          # key=IP (canonical form), value=(datetime_obj (Shanghai naive), source)
+          # 使用 defaultdict 以便处理多个来源可能报告同一IP，但我们只保留最早发现的时间
+          ip_map = {} 
 
           # helper: 规范化 datetime 对象为上海时间的 naive 对象
           def normalize_to_shanghai_naive(dt):
@@ -267,13 +270,14 @@ jobs:
                   content = myfile.read_text(encoding='utf-8', errors='ignore')
                   lines = content.splitlines()
                   for line in lines:
-                      if line.startswith('#') or line.startswith('-') or not line.strip() or "IPv6 | Time" in line:
+                      if line.startswith('#') or line.startswith('-') or not line.strip():
                           continue
                       parts = line.split('|')
                       if len(parts) >= 2:
                           ip_str = parts[0].strip()
                           time_str = parts[1].strip()
-                          src_str = parts[2].strip() if len(parts) > 2 else "Unknown"
+                          # 兼容旧格式，如果源不存在，则设为 Unknown
+                          src_str = parts[2].strip() if len(parts) > 2 else "Unknown" 
                           try:
                               # 解析 IP 时，将其转换为规范化形式作为字典键
                               ip_obj = ipaddress.ip_address(ip_str)
@@ -282,8 +286,11 @@ jobs:
                               dt = dateparser.parse(time_str)
                               # 规范化到上海时间 naive
                               dt = normalize_to_shanghai_naive(dt)
+                              # 检查时间合理性 (防止解析错误导致时间戳异常)
                               if dt and 2000 <= dt.year <= 2035:
-                                  ip_map[canonical_ip] = (dt, src_str)
+                                  # 如果 IP 已经存在，保留旧的时间戳（更早发现的记录）
+                                  if canonical_ip not in ip_map or dt < ip_map[canonical_ip][0]:
+                                      ip_map[canonical_ip] = (dt, src_str)
                           except Exception:
                               # 忽略无法解析的 IP 或时间
                               pass
@@ -300,6 +307,7 @@ jobs:
           found_ts = now
 
           for f in files:
+              # 来源名称来自文件名
               source_name = f.name.replace('v6_source_','').replace('.txt','')
               text = f.read_text(encoding='utf-8', errors='ignore')
 
@@ -313,7 +321,6 @@ jobs:
                   try:
                       ip_obj = ipaddress.ip_address(t_clean)
                       if ip_obj.version == 6:
-                          # 使用标准压缩形式作为集合元素 (已在上次更改中实现)
                           canonical_ip = ip_obj.compressed
                           ips_canonical.add(canonical_ip)
                   except Exception:
@@ -321,49 +328,115 @@ jobs:
 
               for ip in ips_canonical:
                   prev = ip_map.get(ip)
-                  # 如果之前不存在，则以 found_ts（now）加入；已存在则保留旧时间
-                  # 由于 IP 已经规范化，这里的查找是准确的去重
+                  # 如果之前不存在，则以 found_ts（now）加入
+                  # 如果之前存在，且新时间更早（理论上不可能），则更新；否则保留旧时间
                   if prev is None:
                       ip_map[ip] = (found_ts, source_name)
+                  # ⚠️ 注意：如果 IP 已经存在，我们保留它最初被记录的时间（即 ip_map[ip][0]）。
+                  # 如果需要更新为最新的发现时间，则改为：ip_map[ip] = (max(prev[0], found_ts), source_name)
+                  # 这里我们保持保守，保留最早时间，避免频繁变动。
 
-          # 4. 排序、截断与写入（按时间倒序，最新在前）
-          all_items = sorted(ip_map.items(), key=lambda kv: kv[1][0], reverse=True)
-          total_found = len(all_items)
-          kept_items = all_items[:MAX_COUNT]
+          # 4. 准备分组、计算配额
+          # 获取所有IP的来源列表 (按字母顺序排序，以便确定处理顺序)
+          unique_sources = sorted(list(set(v[1] for v in ip_map.values())))
+          num_sources = len(unique_sources)
+          
+          if num_sources > 0:
+              # 平均配额（整数除法）
+              limit_per_source = MAX_COUNT // num_sources
+              # 处理余数，将剩余配额分配给前面的源 (简单处理，不影响核心逻辑)
+              remainder = MAX_COUNT % num_sources
+          else:
+              limit_per_source = 0
+              remainder = 0
+              
+          print(f"Total Unique IPs Found: {len(ip_map)}")
+          print(f"Total Unique Sources: {num_sources}")
+          print(f"Max Global Count: {MAX_COUNT}. Calculated Limit Per Source: {limit_per_source} (+{remainder} remainder)")
 
-          if kept_items:
-              times = [v[0] for _, v in kept_items]
+          kept_items_flat = [] # 用于最终写入的 IPs (包含 ip, dt, src)
+          
+          if limit_per_source == 0 and remainder == 0:
+              print("No sources or limit is zero. Generating empty file.")
+          else:
+              # 5. 按来源分组
+              # source_grouped_ips: {source_name: [(ip, dt, src), ...], ...}
+              source_grouped_ips = defaultdict(list)
+              for ip, (dt, src) in ip_map.items():
+                  source_grouped_ips[src].append((ip, dt, src))
+
+              # 6. 组内排序和截断
+              total_kept = 0
+              for i, src in enumerate(unique_sources):
+                  ips_for_source = source_grouped_ips[src]
+                  
+                  # 确定该来源的实际配额
+                  current_limit = limit_per_source
+                  if i < remainder: # 分配余数
+                      current_limit += 1
+                      
+                  # 组内排序：按时间戳倒序 (最新在前)
+                  ips_for_source.sort(key=lambda x: x[1], reverse=True)
+                  
+                  # 组内截断
+                  kept_in_group = ips_for_source[:current_limit]
+                  kept_items_flat.extend(kept_in_group)
+                  total_kept += len(kept_in_group)
+                  
+                  # 将处理后的列表存回 grouped map，以便下一步的分组输出
+                  source_grouped_ips[src] = kept_in_group
+                  
+                  print(f"Source '{src}': Total found: {len(ips_for_source)}, Quota: {current_limit}, Kept: {len(kept_in_group)}")
+
+              print(f"Total IPs kept after quotas: {total_kept}")
+
+          # 7. 为报告头计算全局统计数据
+          time_range = "N/A"
+          newest = None
+          oldest = None
+          if kept_items_flat:
+              # 获取所有保留 IP 的时间，用于确定全局时间范围
+              times = [item[1] for item in kept_items_flat]
               newest = max(times)
               oldest = min(times)
-              # 时间范围显示上海时间
               time_range = f"{oldest.strftime('%Y-%m-%d %H:%M:%S')} ~ {newest.strftime('%Y-%m-%d %H:%M:%S')}"
-          else:
-              time_range = "N/A"
+          
+          generated_at = now.strftime('%Y-%m-%d %H:%M:%S') # 生成时间显示上海时间
 
-          unique_sources = set(v[1] for _, v in kept_items)
-          # 生成时间显示上海时间
-          generated_at = now.strftime('%Y-%m-%d %H:%M:%S')
-
+          # 8. 写入文件：报告头
           header_lines = [
-              "# IPv6 Summary Report",
+              "# IPv6 Summary Report (Grouped by Source, Fair Distribution Applied)",
               "# NOTE: All times are Shanghai Time (UTC+8)",
-              f"Total IPv6 (Merged Pool): {total_found}",
-              f"Time Range: {time_range}",
-              f"Source Count: {len(unique_sources)}",
+              f"Total Unique IPs Found (Merged Pool): {len(ip_map)}",
+              f"Actual IPs Kept: {len(kept_items_flat)}",
+              f"Applied Global Limit (MAX_IPV6_COUNT): {MAX_COUNT}",
+              f"Calculated Limit Per Source: {limit_per_source} (+{remainder} remainder)",
+              f"Time Range (Kept IPs): {time_range}",
               f"Generated At (Shanghai Time): {generated_at}",
-              f"Applied Limit (MAX_IPV6_COUNT): {MAX_COUNT}",
               "-"*80,
-              "IPv6 | Time | Source",
-              "-"*80
           ]
 
           with myfile.open('w', encoding='utf-8') as fh:
               fh.write("\n".join(header_lines) + "\n")
-              for ip, (dt, src) in kept_items:
-                  # 写入时，ip 已经是规范化后的压缩形式，dt 是上海时间 naive
-                  fh.write(f"{ip} | {dt.strftime('%Y-%m-%d %H:%M:%S')} | {src}\n")
+              
+              # 9. 分组输出：按来源名称排序 (Alphabetical Order)
+              for src in unique_sources:
+                  kept_in_group = source_grouped_ips[src]
+                  
+                  if not kept_in_group:
+                      continue
+                      
+                  # 组头：显示来源名称、实际保留数量和该来源的配额
+                  quota = limit_per_source + 1 if unique_sources.index(src) < remainder else limit_per_source
+                  fh.write(f"\n# === Source: {src} ({len(kept_in_group)} / {quota} kept) ===\n")
+                  fh.write("IPv6 | Time | Source\n")
+                  fh.write("-" * 80 + "\n")
 
-          print(f"Done. Total merged: {total_found}. Kept top {len(kept_items)}. Saved to {myfile}")
+                  for ip, dt, _ in kept_in_group:
+                      # 组内已按时间倒序排序 (最新在前)
+                      fh.write(f"{ip} | {dt.strftime('%Y-%m-%d %H:%M:%S')} | {src}\n")
+
+          print(f"Done. Total merged: {len(ip_map)}. Total kept after quota: {len(kept_items_flat)}. Saved to {myfile}")
           PY
 
           # 提交变更
