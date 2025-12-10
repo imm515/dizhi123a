@@ -81,7 +81,7 @@ jobs:
           TARGET_DIR = Path('./ipv6_fetch_temp')
           COMMIT_DETAILS_BODY_FILE = Path("commit_details_body.txt")
           COMMIT_MESSAGE_FILE = Path("final_commit_message.txt")
-          GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT')  # runner 提供的文件路径
+          GITHUB_OUTPUT = os.environ.get('GITHUB_OUTPUT')  # runner 提供的文件路径
           
           if not URL_LIST:
               print("WARNING: IPV6_SOURCE_URLS is empty. Skipping fetch operation.")
@@ -107,17 +107,25 @@ jobs:
               chrome_options.add_argument("--window-size=1920,1080")
               chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
               
+              # 尝试使用 ChromeDriver Manager 自动安装或查找驱动
               service = Service(ChromeDriverManager().install())
               driver = webdriver.Chrome(service=service, options=chrome_options)
               driver.set_page_load_timeout(30)
               print("Selenium WebDriver initialized successfully (Headless Chrome).")
           except Exception as e:
-              print(f"ERROR: Failed to initialize Selenium WebDriver: {e}", file=sys.stderr)
-              if GITHUB_OUTPUT:
-                  with open(GITHUB_OUTPUT, "a") as f:
-                      f.write(f"files_created=0\n")
-              COMMIT_MESSAGE_FILE.write_text("Failed to initialize WebDriver.\n")
-              sys.exit(1)
+              # 如果 WebDriver 初始化失败，尝试不使用 service (依赖系统已安装的驱动或环境变量)
+              try:
+                  print(f"Initial WebDriver setup failed ({e}), trying fallback...")
+                  driver = webdriver.Chrome(options=chrome_options)
+                  driver.set_page_load_timeout(30)
+                  print("Selenium WebDriver initialized successfully (Fallback).")
+              except Exception as fallback_e:
+                  print(f"ERROR: Failed to initialize Selenium WebDriver (Fallback failed): {fallback_e}", file=sys.stderr)
+                  if GITHUB_OUTPUT:
+                      with open(GITHUB_OUTPUT, "a") as f:
+                          f.write(f"files_created=0\n")
+                  COMMIT_MESSAGE_FILE.write_text("Failed to initialize WebDriver.\n")
+                  sys.exit(1)
           
           # Fetch loop
           for url in urls:
@@ -205,17 +213,25 @@ jobs:
           from pathlib import Path
 
           try:
-              from dateutil import parser as dateparser
+              # 引入 dateutil.tz 用于时区处理
+              from dateutil import parser as dateparser, tz 
           except ImportError:
               print("ERROR: 'python-dateutil' library required but not found.", file=sys.stderr)
               sys.exit(1)
 
-          # 1. 获取配置和当前时间（统一使用 UTC 无时区标记，文件头说明为 UTC）
+          # 1. 获取配置和当前时间（统一使用上海时间 UTC+8）
           TARGET_FOLDER = os.environ.get('TARGET_FOLDER', '').strip()
           MAX_COUNT = int(os.environ.get('MAX_IPV6_COUNT', '500'))
+          
+          # 定义上海时区
+          SHANGHAI_TZ = tz.gettz('Asia/Shanghai')
 
-          now = datetime.datetime.utcnow()  # UTC (naive)
-          print(f"Current Run Time for new IPs (UTC): {now.strftime('%Y-%m-%d %H:%M:%S')}")
+          # 获取当前的上海时间（带时区信息）
+          now_shanghai_aware = datetime.datetime.now(SHANGHAI_TZ)
+          # 将其转换为无时区信息的 naive datetime 对象，但值代表上海时间
+          now = now_shanghai_aware.replace(tzinfo=None) 
+          
+          print(f"Current Run Time for new IPs (Shanghai Time, Naive): {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
           if not TARGET_FOLDER:
               print("ERROR: TARGET_FOLDER not set")
@@ -226,20 +242,25 @@ jobs:
           target_dir.mkdir(parents=True, exist_ok=True)
 
           myfile = target_dir / 'myIPv6.txt'
-          ip_map = {}  # key=IP, value=(datetime_obj (UTC naive), source)
+          ip_map = {}  # key=IP (canonical form), value=(datetime_obj (Shanghai naive), source)
 
-          # helper: normalize datetime to UTC naive (if tz-aware, convert to UTC and drop tzinfo)
-          def normalize_to_utc_naive(dt):
+          # helper: 规范化 datetime 对象为上海时间的 naive 对象
+          def normalize_to_shanghai_naive(dt):
               if dt is None:
                   return None
               try:
-                  if dt.tzinfo is None:
-                      return dt
-                  return dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+                  # 如果是带时区的 aware 对象，先转换到上海时区
+                  if dt.tzinfo is not None:
+                      dt_shanghai = dt.astimezone(SHANGHAI_TZ)
+                      # 移除时区信息，使其成为 Shanghai naive
+                      return dt_shanghai.replace(tzinfo=None)
+                  
+                  # 如果是 naive 对象，我们假定它已经是上海时间
+                  return dt
               except Exception:
                   return None
 
-          # 2. 读取已存在的 myIPv6.txt（解析旧时间并规范化）
+          # 2. 读取已存在的 myIPv6.txt（解析旧时间并规范化到上海时间）
           if myfile.exists():
               print(f"Read existing file: {myfile}")
               try:
@@ -254,23 +275,28 @@ jobs:
                           time_str = parts[1].strip()
                           src_str = parts[2].strip() if len(parts) > 2 else "Unknown"
                           try:
+                              # 解析 IP 时，将其转换为规范化形式作为字典键
+                              ip_obj = ipaddress.ip_address(ip_str)
+                              canonical_ip = ip_obj.compressed 
+                              
                               dt = dateparser.parse(time_str)
-                              dt = normalize_to_utc_naive(dt)
+                              # 规范化到上海时间 naive
+                              dt = normalize_to_shanghai_naive(dt)
                               if dt and 2000 <= dt.year <= 2035:
-                                  ip_map[ip_str] = (dt, src_str)
+                                  ip_map[canonical_ip] = (dt, src_str)
                           except Exception:
-                              # 忽略无法解析的旧时间
+                              # 忽略无法解析的 IP 或时间
                               pass
               except Exception as e:
                   print(f"Warning: Failed to parse existing file: {e}")
 
           print(f"Loaded {len(ip_map)} entries from existing file.")
 
-          # 3. 处理新抓取的 v6_source_*.txt 文件（不再从网页解析时间，统一使用 now）
+          # 3. 处理新抓取的 v6_source_*.txt 文件（统一使用当前上海时间作为新 IP 的时间戳）
           files = sorted(target_dir.glob('v6_source_*.txt'))
           print(f"Processing {len(files)} new source files...")
 
-          # 统一使用当前运行时间作为新 IP 的时间戳（UTC naive）
+          # 统一使用当前运行时间（上海时间 naive）作为新 IP 的时间戳
           found_ts = now
 
           for f in files:
@@ -279,7 +305,7 @@ jobs:
 
               # 提取可能的 IPv6（粗略过滤后用 ipaddress 验证）
               tokens = set(re.findall(r'[0-9A-Fa-f:.]{2,}|[0-9A-Fa-f:]+', text))
-              ips = set()
+              ips_canonical = set()
               for t in tokens:
                   if ':' not in t:
                       continue
@@ -287,13 +313,16 @@ jobs:
                   try:
                       ip_obj = ipaddress.ip_address(t_clean)
                       if ip_obj.version == 6:
-                          ips.add(t_clean)
+                          # 使用标准压缩形式作为集合元素 (已在上次更改中实现)
+                          canonical_ip = ip_obj.compressed
+                          ips_canonical.add(canonical_ip)
                   except Exception:
                       continue
 
-              for ip in ips:
+              for ip in ips_canonical:
                   prev = ip_map.get(ip)
                   # 如果之前不存在，则以 found_ts（now）加入；已存在则保留旧时间
+                  # 由于 IP 已经规范化，这里的查找是准确的去重
                   if prev is None:
                       ip_map[ip] = (found_ts, source_name)
 
@@ -306,20 +335,22 @@ jobs:
               times = [v[0] for _, v in kept_items]
               newest = max(times)
               oldest = min(times)
+              # 时间范围显示上海时间
               time_range = f"{oldest.strftime('%Y-%m-%d %H:%M:%S')} ~ {newest.strftime('%Y-%m-%d %H:%M:%S')}"
           else:
               time_range = "N/A"
 
           unique_sources = set(v[1] for _, v in kept_items)
-          generated_at = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+          # 生成时间显示上海时间
+          generated_at = now.strftime('%Y-%m-%d %H:%M:%S')
 
           header_lines = [
               "# IPv6 Summary Report",
-              "# NOTE: All times are UTC",
+              "# NOTE: All times are Shanghai Time (UTC+8)",
               f"Total IPv6 (Merged Pool): {total_found}",
               f"Time Range: {time_range}",
               f"Source Count: {len(unique_sources)}",
-              f"Generated At (UTC): {generated_at}",
+              f"Generated At (Shanghai Time): {generated_at}",
               f"Applied Limit (MAX_IPV6_COUNT): {MAX_COUNT}",
               "-"*80,
               "IPv6 | Time | Source",
@@ -329,6 +360,7 @@ jobs:
           with myfile.open('w', encoding='utf-8') as fh:
               fh.write("\n".join(header_lines) + "\n")
               for ip, (dt, src) in kept_items:
+                  # 写入时，ip 已经是规范化后的压缩形式，dt 是上海时间 naive
                   fh.write(f"{ip} | {dt.strftime('%Y-%m-%d %H:%M:%S')} | {src}\n")
 
           print(f"Done. Total merged: {total_found}. Kept top {len(kept_items)}. Saved to {myfile}")
@@ -346,7 +378,7 @@ jobs:
               echo "Commit success. Pushing to origin/${CURRENT_BRANCH}..."
               git push origin "$CURRENT_BRANCH"
             else
-              echo "::warning::Git commit failed but files were changed. Check logs."
+              echo "::warning::Git commit failed but files was changed. Check logs."
             fi
           fi
 
