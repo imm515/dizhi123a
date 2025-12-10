@@ -1,4 +1,4 @@
-name: 4 Selenium IPv6 Source Fetcher (Enhanced)
+name: 3 IPv6 Source Fetcher (Enhanced)
 
 on:
   workflow_dispatch:
@@ -45,9 +45,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable
           
-      - name: ⚙️ Install Python Libraries (Selenium & WebDriver Manager)
+      - name: ⚙️ Install Python Libraries (Selenium, WebDriver Manager & dateutil)
         run: |
-          pip install selenium webdriver-manager
+          # dateutil 是聚合脚本中用于日期时间解析的关键库
+          pip install selenium webdriver-manager python-dateutil
       # ---------------------------------------------
 
       - name: 🌐 Fetch IPv6 Addresses and Save (using Selenium)
@@ -227,15 +228,13 @@ jobs:
           import os, sys, re, ipaddress, datetime
           from pathlib import Path
           
-          # 确保 dateutil 库可用，因为 actions/setup-python 步骤中没有显式安装它，
-          # 但假设它是标准 Python 环境的一部分或已安装。为了本脚本的独立性，
-          # 如果之前的工作流没有安装，这里可能会依赖于默认环境。
-          # 考虑到上一步已安装了依赖，这里可以正常使用。
+          # 导入 dateutil 库以确保可用性
           try:
               from dateutil import parser as dateparser
           except ImportError:
               print("ERROR: 'python-dateutil' library required but not found.", file=sys.stderr)
-              # 在 GitHub Actions 环境中，依赖通常在上一步安装完成，这里无需重复处理
+              # 如果运行到这里，说明上一步安装失败，脚本应退出
+              sys.exit(1)
 
           # 1. 获取配置
           TARGET_FOLDER = os.environ.get('TARGET_FOLDER', '').strip()
