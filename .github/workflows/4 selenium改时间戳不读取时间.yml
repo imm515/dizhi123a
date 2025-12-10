@@ -8,6 +8,14 @@ on:
         required: false
         default: '500' # 默认值 500
         type: string
+  workflow_run:
+    workflows: ["2 Time"]
+    types:
+      - completed
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   fetch_and_sync_ipv6:

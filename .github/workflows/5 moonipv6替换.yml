@@ -8,13 +8,14 @@ on:
         required: false
         default: '6'
         type: string
-  schedule:
-    # 示例：每天固定时间运行一次，您可以根据需要调整
-    - cron: '0 0 * * *' 
+  workflow_run:
+    workflows: ["4 Selenium IPv6 改用时间戳"]
+    types:
+      - completed 
 
 concurrency:
-  group: ${{ github.repository }}-${{ github.ref }}-ipv6
-  cancel-in-progress: true
+  group: ${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
