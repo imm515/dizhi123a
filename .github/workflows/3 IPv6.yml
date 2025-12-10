@@ -1,0 +1,166 @@
+# 文件名: 3 IPv6.yml
+name: 3 IPv6 Source Fetcher 
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch_and_sync_ipv6:
+    runs-on: ubuntu-latest
+      
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: ⚙️ Set Git Credentials
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          
+      - name: 🌐 Fetch IPv6 Addresses and Save Separately
+        id: fetch
+        # 读取 Secret 变量
+        env:
+          URL_LIST: ${{ secrets.IPV6_SOURCE_URLS }}
+          TARGET_DIR: ./ipv6_fetch_temp
+          
+        run: |
+          echo "Start fetching and saving IPv6 sources..."
+          
+          mkdir -p $TARGET_DIR
+          # *** 关键修复 1/2：创建最终的提交信息文件在工作区根目录 ***
+          COMMIT_DETAILS_BODY_FILE="commit_details_body.txt"
+          COMMIT_MESSAGE_FILE="final_commit_message.txt" # 最终提交信息文件
+          
+          # 确保文件是空的
+          > "$COMMIT_DETAILS_BODY_FILE"
+          
+          if [ -z "$URL_LIST" ]; then
+            echo "WARNING: IPV6_SOURCE_URLS is empty. Skipping fetch operation."
+            echo "files_created=0" >> $GITHUB_OUTPUT 
+            # 即使跳过，也需要创建空的提交信息文件以供下一步使用
+            echo "Skipped due to empty URL list." > "$COMMIT_MESSAGE_FILE"
+            exit 0
+          fi
+          
+          # 使用 mapfile 安全读取多行 Secret
+          URL_LIST_CLEANED=$(echo "$URL_LIST" | tr -d '\r')
+          mapfile -t URLs <<< "$URL_LIST_CLEANED" 
+          
+          COUNT=0
+          
+          for URL in "${URLs[@]}"; do
+            URL=$(echo "$URL" | tr -d '[:space:]')
+            if [ -z "$URL" ]; then
+                continue
+            fi
+            
+            HOSTNAME=$(echo "$URL" | sed -E 's/^\w+:\/\///' | cut -d '/' -f 1 | tr -d '.') || true
+            FILENAME="${TARGET_DIR}/v6_source_${HOSTNAME}.txt"
+
+            echo "--- Processing URL: $URL ---"
+            
+            if [ -z "$HOSTNAME" ]; then
+                echo "❌ Failed to extract hostname from $URL. Skipping."
+                continue
+            fi
+            
+            # 使用 curl 获取内容
+            if curl -s -L "$URL" > "$FILENAME"; then
+              
+              # 确保文件末尾有换行符
+              echo "" >> "$FILENAME" 
+              
+              LINES=$(wc -l < "$FILENAME") || true
+              if [ "$LINES" -gt 0 ]; then
+                  echo "✅ Successfully fetched $LINES lines, saved as $FILENAME"
+                  # 将结果追加到文件
+                  echo "- Fetched ${LINES} lines from ${HOSTNAME}" >> "$COMMIT_DETAILS_BODY_FILE"
+                  COUNT=$((COUNT + 1))
+              else
+                  echo "⚠️ Fetched content is empty from $URL. Skipping file creation."
+                  rm -f "$FILENAME"
+              fi
+            else
+              echo "❌ Failed to fetch content from $URL (Curl returned error). Skipping this URL."
+              rm -f "$FILENAME"
+            fi
+            
+          done
+          
+          echo "Finished fetching. Total files created: $COUNT"
+          
+          # 1. 传递 files_created (单行格式)
+          echo "files_created=$COUNT" >> $GITHUB_OUTPUT
+          
+          # 2. *** 关键修复 2/2：将 HEADER 和 BODY 合并到最终的提交信息文件 ***
+          HEADER_MESSAGE="Auto update IPv6 sources (${COUNT} files)"
+          (echo "$HEADER_MESSAGE"; echo ""; cat "$COMMIT_DETAILS_BODY_FILE") > "$COMMIT_MESSAGE_FILE"
+
+
+      - name: 💾 Sync Files to Target Repository
+        if: steps.fetch.outputs.files_created > 0
+        
+        env:
+          TARGET_URL: ${{ secrets.TARGET_REPO }}
+          TARGET_PAT: ${{ secrets.TARGET_PAT }}
+          TARGET_FOLDER: ${{ secrets.TARGET_FOLDER }}
+          TEMP_DIR: ./ipv6_fetch_temp
+          
+        run: |
+          echo "Starting synchronization to target repository..."
+
+          if [ -z "$TARGET_URL" ] || [ -z "$TARGET_PAT" ] || [ -z "$TARGET_FOLDER" ]; then
+              echo "::error::Target repository secrets (TARGET_REPO, TARGET_PAT, or TARGET_FOLDER) are not configured. Skipping synchronization."
+              exit 0 
+          fi
+          
+          # 自动识别 TARGET_REPO 格式
+          TARGET_URL_RAW="${TARGET_URL}"
+          TARGET_URL_HOST=""
+          
+          if [[ $TARGET_URL_RAW == *"."* ]] || [[ $TARGET_URL_RAW == https://* ]]; then
+              TARGET_URL_HOST=$(echo "$TARGET_URL_RAW" | sed 's/https:\/\///')
+          else
+              TARGET_URL_HOST="github.com/${TARGET_URL_RAW}"
+          fi
+          
+          TARGET_URL_WITH_PAT="https://${TARGET_PAT}@${TARGET_URL_HOST}"
+          
+          # 1. 克隆目标仓库
+          git clone $TARGET_URL_WITH_PAT target_repo_sync
+          
+          # 2. 目标目录准备
+          cd target_repo_sync
+          mkdir -p "${TARGET_FOLDER}"
+          
+          # 3. 复制文件
+          git config core.fileMode false
+          cp -f ../${TEMP_DIR}/*.txt "./${TARGET_FOLDER}/"
+          
+          # 4. 检查是否有变动并提交
+          git add .
+          
+          if git diff --cached --exit-code; then
+            echo "::debug::No changes detected in target repository. Skipping commit/push."
+            exit 0
+          else
+            # *** 关键修复：使用 git commit -F <file> 从文件中读取提交信息 ***
+            COMMIT_FILE="../final_commit_message.txt"
+            
+            if git commit -F "$COMMIT_FILE" --allow-empty-message; then
+              echo "Committing changes successfully."
+              git push origin main
+              echo "✅ Push successful."
+              exit 0
+            else
+              # --- 打印错误原因 ---
+              echo "--- ❌ GIT COMMIT FAILED ---"
+              echo "WARNING: Git commit returned non-zero exit code (通常是 1, 原因是文件警告或配置问题)."
+              echo "请检查上方日志中 'git commit' 附近的 WARNING 或 ERROR 输出来查找具体原因。"
+              echo "尝试强制推送更改以确保同步..."
+              
+              # 尝试推送。如果推送失败，脚本会返回非零退出码，工作流会标记为失败。
+              git push origin main 
+            fi
+          fi

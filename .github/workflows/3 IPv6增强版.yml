@@ -1,0 +1,274 @@
+name: 3 IPv6 Source Fetcher (Enhanced)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  fetch_and_sync_ipv6:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Shanghai
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ⚙️ Set Git Credentials
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: 🌐 Fetch IPv6 Addresses and Save
+        id: fetch
+        env:
+          URL_LIST: ${{ secrets.IPV6_SOURCE_URLS }}
+        run: |
+          echo "Start fetching IPv6 sources..."
+          TARGET_DIR=./ipv6_fetch_temp
+          mkdir -p "$TARGET_DIR"
+          COMMIT_DETAILS_BODY_FILE="commit_details_body.txt"
+          COMMIT_MESSAGE_FILE="final_commit_message.txt"
+          > "$COMMIT_DETAILS_BODY_FILE"
+          > "$COMMIT_MESSAGE_FILE"
+
+          if [ -z "$URL_LIST" ]; then
+            echo "WARNING: IPV6_SOURCE_URLS is empty. Skipping fetch operation."
+            echo "files_created=0" >> $GITHUB_OUTPUT
+            echo "Skipped due to empty URL list." > "$COMMIT_MESSAGE_FILE"
+            exit 0
+          fi
+
+          URL_LIST_CLEANED=$(echo "$URL_LIST" | tr -d '\r')
+          mapfile -t URLs <<< "$URL_LIST_CLEANED"
+          COUNT=0
+
+          for URL in "${URLs[@]}"; do
+            URL=$(echo "$URL" | tr -d '[:space:]')
+            if [ -z "$URL" ]; then
+              continue
+            fi
+            HOSTNAME=$(echo "$URL" | sed -E 's/^\w+:\/\///' | cut -d '/' -f 1 | tr -d '.')
+            FILENAME="${TARGET_DIR}/v6_source_${HOSTNAME}.txt"
+            echo "--- Processing URL: $URL ---"
+            if curl -s -L "$URL" > "$FILENAME"; then
+              echo "" >> "$FILENAME"
+              LINES=$(wc -l < "$FILENAME" || echo 0)
+              if [ "$LINES" -gt 0 ]; then
+                echo "✅ Fetched $LINES lines, saved as $FILENAME"
+                echo "- Fetched ${LINES} lines from ${HOSTNAME}" >> "$COMMIT_DETAILS_BODY_FILE"
+                COUNT=$((COUNT + 1))
+              else
+                echo "⚠️ Fetched content empty from $URL. Removing file."
+                rm -f "$FILENAME"
+              fi
+            else
+              echo "❌ Failed to fetch content from $URL. Skipping."
+              rm -f "$FILENAME"
+            fi
+          done
+
+          echo "Finished fetching. Total files created: $COUNT"
+          echo "files_created=$COUNT" >> $GITHUB_OUTPUT
+          HEADER_MESSAGE="Auto update IPv6 sources (${COUNT} files)"
+          (echo "$HEADER_MESSAGE"; echo ""; cat "$COMMIT_DETAILS_BODY_FILE") > "$COMMIT_MESSAGE_FILE"
+
+      - name: 💾 Sync Files to Target Repository
+        if: steps.fetch.outputs.files_created != '0'
+        env:
+          TARGET_URL: ${{ secrets.TARGET_REPO }}
+          TARGET_PAT: ${{ secrets.TARGET_PAT }}
+          TARGET_FOLDER: ${{ secrets.TARGET_FOLDER }}
+          TEMP_DIR: ./ipv6_fetch_temp
+        run: |
+          echo "Starting sync to target repository..."
+          if [ -z "$TARGET_URL" ] || [ -z "$TARGET_PAT" ] || [ -z "$TARGET_FOLDER" ]; then
+            echo "::error::TARGET_REPO / TARGET_PAT / TARGET_FOLDER not configured. Skipping."
+            exit 0
+          fi
+
+          TARGET_URL_RAW="${TARGET_URL}"
+          TARGET_URL_HOST=""
+          if [[ $TARGET_URL_RAW == *"."* ]] || [[ $TARGET_URL_RAW == https://* ]]; then
+            TARGET_URL_HOST=$(echo "$TARGET_URL_RAW" | sed 's#https://##')
+          else
+            TARGET_URL_HOST="github.com/${TARGET_URL_RAW}"
+          fi
+
+          TARGET_URL_WITH_PAT="https://${TARGET_PAT}@${TARGET_URL_HOST}"
+
+          # clone target repo
+          git clone "$TARGET_URL_WITH_PAT" target_repo_sync
+          cd target_repo_sync
+
+          mkdir -p "${TARGET_FOLDER}"
+          git config core.fileMode false
+
+          # copy fetched files
+          cp -f ../${TEMP_DIR}/*.txt "./${TARGET_FOLDER}/" || true
+
+          # --- NEW: Generate myIPv6.txt inside target repo using Python ---
+          echo "Running IPv6 aggregation script..."
+          python3 - <<'PY'
+          import os, sys, re, ipaddress, datetime
+          from pathlib import Path
+          from dateutil import parser as dateparser
+          
+          # Config (from env)
+          TARGET_FOLDER = os.environ.get('TARGET_FOLDER', '').strip()
+          if not TARGET_FOLDER:
+              print("ERROR: TARGET_FOLDER not set")
+              sys.exit(1)
+          
+          # limit (默认10，可在 workflow env 中覆盖)
+          try:
+              MAX_COUNT = int(os.environ.get('MAX_IPV6_COUNT', '10'))
+          except:
+              MAX_COUNT = 10
+          
+          repo_root = Path.cwd()
+          target_dir = repo_root / TARGET_FOLDER
+          
+          if not target_dir.exists():
+              print(f"Target dir {target_dir} does not exist. Nothing to do.")
+              sys.exit(0)
+          
+          # helper: extract possible timestamps with several regexes
+          timestamp_patterns = [
+              r'\d{4}[-/]\d{1,2}[-/]\d{1,2}[ T]\d{1,2}:\d{2}:\d{2}',  # 2025-01-11 03:50:22 or 2025/01/11 03:50:22
+              r'\d{4}[-/]\d{1,2}[-/]\d{1,2}[ T]\d{1,2}:\d{2}',        # 2025-01-11 03:50
+              r'\d{2,4}[-/]\d{1,2}[-/]\d{1,2}',                      # date only
+              r'\w{3,9}\s+\d{1,2},\s*\d{4}\s*\d{0,2}:\d{0,2}:\d{0,2}',# Jan 11, 2025 03:50:22
+          ]
+          
+          # collect files
+          files = sorted(target_dir.glob('v6_source_*.txt'))
+          print(f"Found {len(files)} source files.")
+          
+          # store ip -> (datetime obj, source)
+          ip_map = {}
+          
+          for f in files:
+              source_name = f.name.replace('v6_source_','').replace('.txt','')
+              text = f.read_text(encoding='utf-8', errors='ignore')
+              # find candidate tokens that contain ':'
+              tokens = set(re.findall(r'[0-9A-Fa-f:.]{2,}|[0-9A-Fa-f:]+', text))
+              ips = set()
+              for t in tokens:
+                  if ':' not in t:
+                      continue
+                  # remove trailing punctuation
+                  t_clean = t.strip(" ,;\"'()[]<>")
+                  # try to validate as ip
+                  try:
+                      ip_obj = ipaddress.ip_address(t_clean)
+                      if ip_obj.version == 6:
+                          ips.add(t_clean)
+                  except Exception:
+                      continue
+          
+              # find timestamps
+              found_ts = None
+              for pat in timestamp_patterns:
+                  m = re.search(pat, text)
+                  if m:
+                      s = m.group(0)
+                      # try parse
+                      try:
+                          dt = dateparser.parse(s, fuzzy=True)
+                          found_ts = dt
+                          break
+                      except Exception:
+                          continue
+          
+              if found_ts is None:
+                  # fallback to file mtime
+                  mtime = datetime.datetime.fromtimestamp(f.stat().st_mtime)
+                  found_ts = mtime
+          
+              for ip in ips:
+                  # if existing, keep the latest
+                  prev = ip_map.get(ip)
+                  if prev is None or found_ts > prev[0]:
+                      ip_map[ip] = (found_ts, source_name)
+          
+          # Now dedup done. Sort by time desc
+          items = sorted(ip_map.items(), key=lambda kv: kv[1][0], reverse=True)
+          
+          # Determine first-run: existing myIPv6.txt present?
+          myfile = target_dir / 'myIPv6.txt'
+          is_first_run = not myfile.exists()
+          print(f"is_first_run = {is_first_run}")
+          
+          # If not first run, apply limit MAX_COUNT
+          if (not is_first_run) and (MAX_COUNT > 0) and (len(items) > MAX_COUNT):
+              # keep only newest MAX_COUNT
+              kept = items[:MAX_COUNT]
+              removed = items[MAX_COUNT:]
+          else:
+              kept = items
+              removed = []
+          
+          # Build report header
+          total_unique = len(items)
+          if items:
+              times = [v[0] for _, v in items]
+              newest = max(times)
+              oldest = min(times)
+              time_range = f"{oldest.strftime('%Y-%m-%d %H:%M:%S')} ~ {newest.strftime('%Y-%m-%d %H:%M:%S')}"
+          else:
+              time_range = "N/A"
+          
+          source_set = set(v[1] for _, v in items)
+          source_count = len(source_set)
+          generated_at = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+          
+          header_lines = [
+              "# IPv6 Summary Report",
+              f"Total IPv6 (unique found across sources): {total_unique}",
+              f"Time Range: {time_range}",
+              f"Source Count: {source_count}",
+              f"Generated At: {generated_at}",
+              f"Applied Limit (MAX_IPV6_COUNT): {MAX_COUNT} (first_run_skip={is_first_run})",
+              "-"*80,
+              "IPv6 | Time | Source",
+              "-"*80
+          ]
+          
+          # write file
+          with myfile.open('w', encoding='utf-8') as fh:
+              fh.write("\n".join(header_lines) + "\n")
+              for ip, (dt, src) in kept:
+                  fh.write(f"{ip} | {dt.strftime('%Y-%m-%d %H:%M:%S')} | {src}\n")
+          
+          # print summary of removals
+          if removed:
+              print(f"Removed {len(removed)} oldest IPv6 entries due to MAX_IPV6_COUNT={MAX_COUNT}:")
+              for ip, (dt, src) in removed:
+                  print(f"  Removed {ip} | {dt.strftime('%Y-%m-%d %H:%M:%S')} | {src}")
+          
+          print(f"Final kept count: {len(kept)}. myIPv6.txt generated at {myfile}")
+          PY
+
+          # commit changes
+          git add "${TARGET_FOLDER}" || true
+
+          # prepare commit message file
+          COMMIT_FILE="../final_commit_message.txt"
+          if [ -f "$COMMIT_FILE" ]; then
+            if git commit -F "$COMMIT_FILE" --allow-empty-message; then
+              echo "Commit success."
+              git push origin main
+            else
+              echo "Git commit failed or nothing to commit."
+              git push origin main || true
+            fi
+          else
+            git commit -m "Auto update IPv6 sources and aggregated myIPv6.txt" || true
+            git push origin main || true
+          fi
+
+      - name: ✅ Done
+        run: echo "IPv6 fetch and aggregation complete."
+
