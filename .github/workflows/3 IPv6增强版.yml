@@ -44,6 +44,9 @@ jobs:
           mapfile -t URLs <<< "$URL_LIST_CLEANED"
           COUNT=0
 
+          # 定义一个更像浏览器的 User-Agent 字符串，有助于绕过 Cloudflare 等系统的简单机器人检测。
+          USER_AGENT_HEADER="-A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'"
+
           for URL in "${URLs[@]}"; do
             URL=$(echo "$URL" | tr -d '[:space:]')
             if [ -z "$URL" ]; then
@@ -52,7 +55,9 @@ jobs:
             HOSTNAME=$(echo "$URL" | sed -E 's/^\w+:\/\///' | cut -d '/' -f 1 | tr -d '.')
             FILENAME="${TARGET_DIR}/v6_source_${HOSTNAME}.txt"
             echo "--- Processing URL: $URL ---"
-            if curl -s -L "$URL" > "$FILENAME"; then
+            
+            # 使用 -s (静默模式), -L (跟随重定向) 和自定义 User-Agent
+            if curl -s -L $USER_AGENT_HEADER "$URL" > "$FILENAME"; then
               echo "" >> "$FILENAME"
               LINES=$(wc -l < "$FILENAME" || echo 0)
               if [ "$LINES" -gt 0 ]; then
@@ -285,4 +290,3 @@ jobs:
 
       - name: ✅ Done
         run: echo "IPv6 fetch and aggregation complete."
-
