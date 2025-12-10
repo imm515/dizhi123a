@@ -1,0 +1,265 @@
+name: 5 IPv6 Node Processor and Aggregation
+
+on:
+  workflow_dispatch:
+    inputs:
+      vless_count:
+        description: 'Number of IPv6 VLESS nodes to generate (max 6).'
+        required: false
+        default: '6'
+        type: string
+  schedule:
+    # 示例：每天固定时间运行一次，您可以根据需要调整
+    - cron: '0 0 * * *' 
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}-ipv6
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  process_ipv6_nodes:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Shanghai
+      # 沿用 2.yml 的 secrets 配置
+      TARGET_FOLDER: ${{ secrets.TARGET_FOLDER }}
+      # 目标生成数量，默认为 6
+      VLESS_COUNT: ${{ github.event.inputs.vless_count || '6' }}
+
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (jq and python, perl is available by default)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq python3 python3-pip
+          pip3 install urllib3
+
+      - name: Checkout target repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.TARGET_REPO }}
+          token: ${{ secrets.TARGET_PAT }}
+          path: target-repo
+          fetch-depth: 0
+
+      - name: Process IPv6 Replacement and Generate Nodes (myDizhi_ipv6_modified.txt)
+        id: node_gen
+        run: |
+          set -euo pipefail
+
+          # 定义文件路径（把输出文件直接写到目标仓库目录，便于后续合并与提交）
+          TARGET_DIR="target-repo/${{ env.TARGET_FOLDER }}"
+          MYDIZHI_FILE="${TARGET_DIR}/myDizhi.txt"
+          MYIPV6_FILE="${TARGET_DIR}/myIPv6.txt"
+          OUTPUT_MOD_FILE="${TARGET_DIR}/myDizhi_ipv6_modified.txt"
+
+          # 检查源文件是否存在
+          if [ ! -f "$MYDIZHI_FILE" ]; then
+            echo "::error::myDizhi.txt not found at $MYDIZHI_FILE. Exiting."
+            exit 1
+          fi
+          if [ ! -f "$MYIPV6_FILE" ]; then
+            echo "::error::myIPv6.txt not found at $MYIPV6_FILE. Exiting."
+            exit 1
+          fi
+
+          # 提取第一个 VLESS 节点作为模板（排除注释行）
+          # 使用 '|| true' 确保 grep 没找到时不会中断脚本
+          VLESS_TEMPLATE=$(grep -m 1 '^vless://' "$MYDIZHI_FILE" || true) 
+          if [ -z "$VLESS_TEMPLATE" ]; then
+            echo "::error::No VLESS node found in myDizhi.txt. Exiting."
+            exit 1
+          fi
+          echo "::debug::VLESS Template found: $VLESS_TEMPLATE"
+
+          # 导出变量，确保 Python 子进程能通过 os.environ 读到
+          export VLESS_TEMPLATE
+          export MYIPV6_FILE
+          export OUTPUT_MOD_FILE
+          export VLESS_COUNT="${{ env.VLESS_COUNT }}"
+
+          # 运行 Python 生成文件（Python 中会写入 $OUTPUT_MOD_FILE）
+          python3 - <<'PY'
+          import os, re
+          from urllib.parse import urlparse, parse_qs, urlencode, unquote
+
+          # 从导出的环境变量中获取值
+          VLESS_TEMPLATE = os.environ['VLESS_TEMPLATE']
+          MYIPV6_FILE = os.environ['MYIPV6_FILE']
+          OUTPUT_MOD_FILE = os.environ['OUTPUT_MOD_FILE']
+          # 使用 .get() 方式获取，并提供默认值
+          VLESS_COUNT = int(os.environ.get('VLESS_COUNT','6')) 
+
+          # 端口列表
+          PORTS = [443, 2053, 2083, 2087, 2096, 8443]
+
+          # 解析 VLESS 模板
+          def parse_vless(url):
+              try:
+                  # VLESS URL 格式: vless://UUID@Address:Port?Params#Name
+                  match = re.match(r'vless://([^@]+)@([^:]+):(\d+)([^#]*)#?(.*)', url)
+                  if match:
+                      uuid = match.group(1)
+                      # Address, Port, Params, Name
+                      name = match.group(5) or "" # 确保 name 至少是空字符串
+                      
+                      # 使用 temp_url 确保 urlparse 能正确处理 query 部分
+                      temp_url = url.replace(f"vless://{uuid}@", "https://", 1)
+                      parsed_url = urlparse(temp_url)
+                      
+                      # 解析参数
+                      query_params = parse_qs(parsed_url.query)
+                      # urlencode 将参数转换为 key=value&key2=value2 格式
+                      clean_params = urlencode(query_params, doseq=True)
+                      
+                      return {'uuid': uuid, 'clean_params': clean_params, 'name': name}
+              except Exception as e:
+                  print(f"::error::parse_vless error: {e}")
+              return None
+
+          # 读取 IPv6 地址池 (取最新的前 N 个)
+          def get_ipv6_pool(file_path, limit):
+              ips = []
+              try:
+                  with open(file_path, 'r', encoding='utf-8') as f:
+                      for line in f:
+                          # 跳过空行、注释行和报头行
+                          if not line.strip() or line.strip().startswith('#') or 'IPv6 | Time | Source' in line:
+                              continue
+                          
+                          parts = line.split('|')
+                          ip = parts[0].strip()
+                          
+                          if ':' in ip:
+                              # 剥离可能存在的方括号 (尽管在源文件 myIPv6.txt 中可能没有)
+                              if ip.startswith('[') and ip.endswith(']'):
+                                  ip = ip.strip('[]')
+                              ips.append(ip)
+                          
+                          if len(ips) >= limit:
+                              break
+              except Exception as e:
+                  print(f"::error::get_ipv6_pool failed: {e}")
+              return ips
+
+          # 生成新节点
+          def generate_nodes(template_data, ipv6_pool, count):
+              nodes = []
+              if not template_data or not ipv6_pool:
+                  return nodes
+                  
+              # 确保生成的节点数量不超过目标数量且不超过可用端口数量
+              num_to_generate = min(count, len(PORTS))
+              
+              for i in range(num_to_generate):
+                  # 循环获取 IPv6 地址，实现“如果不够，则用有的循环”
+                  ip = ipv6_pool[i % len(ipv6_pool)]
+                  port = PORTS[i]
+                  
+                  # 编码节点名称，VLESS URI 规范要求 #Name 部分必须编码
+                  name_encoded = template_data['name'].replace(' ', '%20')
+                  
+                  # 拼接 URL 的参数部分，如果存在参数，则以 ? 开头
+                  params_suffix = f"?{template_data['clean_params']}" if template_data['clean_params'] else ""
+                  
+                  # IPv6 地址在 VLESS URI 的 host 部分必须用方括号包围
+                  ip_with_brackets = f"[{ip}]"
+                  
+                  new_url = (
+                      f"vless://{template_data['uuid']}@{ip_with_brackets}:{port}"
+                      f"{params_suffix}"
+                      f"#{name_encoded}_IPv6_{port}"
+                  )
+                  nodes.append(new_url)
+                  
+              return nodes
+
+          # --- Main Execution ---
+          template = parse_vless(VLESS_TEMPLATE)
+          ipv6s = get_ipv6_pool(MYIPV6_FILE, VLESS_COUNT)
+
+          if len(ipv6s) < VLESS_COUNT:
+              print(f"::warning::Only {len(ipv6s)} IPv6 addresses found. Will cycle addresses if necessary.")
+
+          generated = generate_nodes(template, ipv6s, VLESS_COUNT)
+
+          # 写入生成的文件
+          with open(OUTPUT_MOD_FILE, 'w', encoding='utf-8') as fh:
+              for n in generated:
+                  fh.write(n + '\n')
+
+          print(f"::notice::Generated {len(generated)} nodes into {OUTPUT_MOD_FILE}")
+
+          # 向 GITHUB_OUTPUT 输出两个参数，供后续 step 使用 steps.node_gen.outputs.*
+          gout = os.environ.get('GITHUB_OUTPUT')
+          if gout:
+              with open(gout, 'a') as gf:
+                  gf.write(f"ipv6_count={len(generated)}\n")
+                  gf.write(f"modified_file_path={OUTPUT_MOD_FILE}\n")
+          PY
+
+      - name: Update dizhi123.txt with New IPv6 Nodes
+        if: steps.node_gen.outputs.ipv6_count != '0'
+        run: |
+          set -euo pipefail
+
+          # 从 GITHUB_OUTPUT 获取路径和数量，确保使用正确的目录
+          DIZHI123_FILE="target-repo/${{ env.TARGET_FOLDER }}/dizhi123.txt"
+          MOD_FILE="${{ steps.node_gen.outputs.modified_file_path }}"
+          IPV6_COUNT="${{ steps.node_gen.outputs.ipv6_count }}"
+
+          # 确保 MOD_FILE 存在 (它应该在 target-repo 目录内)
+          if [ -z "$MOD_FILE" ] || [ ! -f "$MOD_FILE" ]; then
+            echo "::error::Modified file not found: $MOD_FILE"
+            exit 1
+          fi
+
+          # 确保 dizhi123 存在，如果不存在则创建
+          if [ ! -f "$DIZHI123_FILE" ]; then
+            echo "::warning::dizhi123.txt not found, creating new one at $DIZHI123_FILE"
+            mkdir -p "$(dirname "$DIZHI123_FILE")"
+            touch "$DIZHI123_FILE"
+          fi
+
+          CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+          START_MARKER="--- 新增${IPV6_COUNT}个端口IPv6 (GMT+8: ${CURRENT_TIME}) ---"
+          END_MARKER="--------------------------------------------------"
+
+          # 生成新块到临时文件
+          {
+            echo "$START_MARKER"
+            cat "$MOD_FILE"
+            echo "$END_MARKER"
+          } > /tmp/new_ipv6_block.txt
+
+          # 使用 perl 进行稳健的块删除操作
+          # perl -0777: 启用 slurp mode (读取整个文件)
+          # -pe: 循环处理输入文件，并打印结果
+          # s/...//s: s (substitution) /s (dotall 模式，让 . 匹配换行)
+          # 这会删除 dizhi123.txt 中第一个匹配到的 [START_MARKER]...[END_MARKER] 块
+          perl -0777 -pe 's/--- 新增.*?个端口IPv6.*?--------------------------------------------------\n?//s' "$DIZHI123_FILE" > /tmp/dizhi123_stripped.txt || true
+
+          # 现在把新块和被清理后的内容合并为最终文件 (新块始终在顶部)
+          cat /tmp/new_ipv6_block.txt /tmp/dizhi123_stripped.txt > /tmp/dizhi123_new.txt
+          mv /tmp/dizhi123_new.txt "$DIZHI123_FILE"
+
+          echo "::notice::dizhi123.txt updated (prepended new IPv6 block)."
+
+      - name: Commit and Push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          # 使用 2.yml 中使用的 TARGET_REPO/TARGET_PAT 进行推送
+          repository: ${{ secrets.TARGET_REPO }}
+          token: ${{ secrets.TARGET_PAT }}
+          commit_message: "Auto-update: Inserted ${{ steps.node_gen.outputs.ipv6_count }} new IPv6 VLESS nodes into dizhi123.txt"
+          commit_user_name: GitHub Actions Bot
+          commit_user_email: github-actions-bot@users.noreply.github.com
+          # 仅提交 dizhi123.txt 文件
+          file_pattern: 'target-repo/${{ env.TARGET_FOLDER }}/dizhi123.txt'
+          push_options: '--force-with-lease'
