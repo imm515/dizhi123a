@@ -80,6 +80,9 @@ jobs:
         # 读取现有时间戳
         if [ -f "timestamp.txt" ]; then
           while IFS=: read -r key value; do
+            # 去除key和value的前后空格，兼容旧格式
+            key=$(echo "$key" | xargs)  # xargs会去除前后空格
+            value=$(echo "$value" | xargs)
             timestamps["$key"]="$value"
           done < timestamp.txt
         fi
