@@ -329,13 +329,23 @@ jobs:
             CURRENT_SEC=$(date +%s)
             get_days_diff() {
               local file_date="$1"
-              local file_sec=$(date -d "$file_date" +%s)
-              echo "scale=1; ($CURRENT_SEC - $file_sec)/86400" | bc -l | xargs printf "%.1f"
+              # 检查日期是否为空或无效
+              if [ -z "$file_date" ] || [ "$file_date" = "-" ]; then
+                echo "0"
+                return
+              fi
+              # 尝试解析日期，如果失败则返回0
+              local file_sec
+              file_sec=$(date -d "$file_date" +%s 2>/dev/null) || file_sec=0
+              # 使用awk计算差值，避免依赖bc
+              local days_diff
+              days_diff=$(awk "BEGIN {printf \"%.1f\", ($CURRENT_SEC - $file_sec)/86400}")
+              echo "$days_diff"
             }
 
-            D1_DAYS=$(get_days_diff "${timestamp_dates[dizhi1.txt]}")
-            D2_DAYS=$(get_days_diff "${timestamp_dates[dizhi2.txt]}")
-            D3_DAYS=$(get_days_diff "${timestamp_dates[dizhi3.txt]}")
+            D1_DAYS=$(get_days_diff "${timestamp_dates[dizhi1.txt]:-}")
+            D2_DAYS=$(get_days_diff "${timestamp_dates[dizhi2.txt]:-}")
+            D3_DAYS=$(get_days_diff "${timestamp_dates[dizhi3.txt]:-}")
           else
             D1_DAYS=0
             D2_DAYS=0
