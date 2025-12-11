@@ -318,19 +318,21 @@ jobs:
           DURATION=$((END_SEC - START_SEC))
           FORMATTED_DURATION=$(printf "%02d:%02d:%02d" $((DURATION/3600)) $((DURATION%3600/60)) $((DURATION%60)))
           
+          # 计算时间差
+          CURRENT_SEC=$(date +%s)
+          
+          # 设置默认值
+          D1_DAYS=0
+          D2_DAYS=0
+          D3_DAYS=0
+          
           # 读取时间戳文件
           if [ -f "target-repo/${{ env.TARGET_FOLDER }}/timestamp.txt" ]; then
-            declare -A timestamp_dates
-            while IFS=: read -r key value; do
-              timestamp_dates["$key"]="$value"
-            done < "target-repo/${{ env.TARGET_FOLDER }}/timestamp.txt"
-
-            # 计算时间差
-            CURRENT_SEC=$(date +%s)
+            # 定义函数计算时间差
             get_days_diff() {
               local file_date="$1"
               # 检查日期是否为空或无效
-              if [ -z "$file_date" ] || [ "$file_date" = "-" ]; then
+              if [ -z "$file_date" ]; then
                 echo "0"
                 return
               fi
@@ -342,14 +344,25 @@ jobs:
               days_diff=$(awk "BEGIN {printf \"%.1f\", ($CURRENT_SEC - $file_sec)/86400}")
               echo "$days_diff"
             }
-
-            D1_DAYS=$(get_days_diff "${timestamp_dates[dizhi1.txt]:-}")
-            D2_DAYS=$(get_days_diff "${timestamp_dates[dizhi2.txt]:-}")
-            D3_DAYS=$(get_days_diff "${timestamp_dates[dizhi3.txt]:-}")
-          else
-            D1_DAYS=0
-            D2_DAYS=0
-            D3_DAYS=0
+            
+            # 逐行读取时间戳文件并处理
+            while IFS=: read -r key value; do
+              # 去除key和value的前后空格
+              key=$(echo "$key" | xargs)  # xargs会去除前后空格
+              value=$(echo "$value" | xargs)
+              
+              case "$key" in
+                "dizhi1.txt")
+                  D1_DAYS=$(get_days_diff "$value")
+                  ;;
+                "dizhi2.txt")
+                  D2_DAYS=$(get_days_diff "$value")
+                  ;;
+                "dizhi3.txt")
+                  D3_DAYS=$(get_days_diff "$value")
+                  ;;
+              esac
+            done < "target-repo/${{ env.TARGET_FOLDER }}/timestamp.txt"
           fi
 
           # 生成报告节点

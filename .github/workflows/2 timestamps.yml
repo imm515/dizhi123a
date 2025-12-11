@@ -108,13 +108,9 @@ jobs:
         done
 
         # 生成新的时间戳文件
-        printf "dizhi1.txt:%s
-          dizhi2.txt:%s
-          dizhi3.txt:%s
-          " \
-          "${timestamps[dizhi1.txt]}" \
-          "${timestamps[dizhi2.txt]}" \
-          "${timestamps[dizhi3.txt]}" > timestamp.txt
+        printf "dizhi1.txt:%s\n" "${timestamps[dizhi1.txt]}" > timestamp.txt
+        printf "dizhi2.txt:%s\n" "${timestamps[dizhi2.txt]}" >> timestamp.txt
+        printf "dizhi3.txt:%s\n" "${timestamps[dizhi3.txt]}" >> timestamp.txt
 
     - name: Copy files to target repository
       run: |
