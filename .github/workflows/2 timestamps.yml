@@ -77,43 +77,88 @@ jobs:
         CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
         declare -A timestamps
         
-        # 读取现有时间戳
-        if [ -f "timestamp.txt" ]; then
-          while IFS=: read -r key value; do
-            # 去除key和value的前后空格，兼容旧格式
-            key=$(echo "$key" | xargs)  # xargs会去除前后空格
-            value=$(echo "$value" | xargs)
-            timestamps["$key"]="$value"
-          done < timestamp.txt
-        fi
+        # 从Git历史获取每个文件的最后提交时间
+        get_file_commit_time() {
+          local file="$1"
+          # 从Git历史获取文件最后提交时间
+          cd "target-repo/${{ secrets.TARGET_FOLDER }}"
+          GIT_TIMESTAMP=$(git log -1 --format="%ci" -- "$file" 2>/dev/null | head -1 | cut -d' ' -f1,2 | sed 's/T/ /')
+          cd - > /dev/null
+          
+          if [ -n "$GIT_TIMESTAMP" ] && [ "$GIT_TIMESTAMP" != "" ]; then
+            echo "$GIT_TIMESTAMP"
+          else
+            echo ""
+          fi
+        }
 
         # 检查文件是否有变化
         check_diff() {
           local file="$1"
           local target_file="target-repo/${{ secrets.TARGET_FOLDER }}/$file"
-          if [ -f "$target_file" ] && ! diff -q "$file" "$target_file" >/dev/null; then
-            return 0
-          else
+          
+          # 检查当前文件是否有实际内容（非空且非只有空白字符）
+          if [ ! -s "$file" ] || ! grep -q '[^[:space:]]' "$file"; then
+            echo "::debug::Current file $file is empty or has no meaningful content, skipping timestamp update"
             return 1
           fi
+          
+          # 如果目标文件不存在，说明是第一次创建有内容的文件，需要更新时间戳
+          if [ ! -f "$target_file" ]; then
+            echo "::debug::Target file $target_file does not exist, first time creation with content"
+            return 0
+          fi
+          
+          # 如果目标文件是空的，而当前文件有内容，需要更新时间戳
+          if [ ! -s "$target_file" ] || ! grep -q '[^[:space:]]' "$target_file"; then
+            echo "::debug::Target file $target_file is empty but current file has content, updating timestamp"
+            return 0
+          fi
+          
+          # 如果文件内容不同，则需要更新时间戳
+          if ! diff -q "$file" "$target_file" >/dev/null; then
+            echo "::debug::File $file has changed, updating timestamp"
+            return 0
+          fi
+          
+          # 文件内容相同，不需要更新时间戳
+          return 1
         }
 
-        # 更新需要变更的时间戳
+        # 为每个文件获取Git历史提交时间
         for i in 1 2 3; do
           file="dizhi${i}.txt"
-          if check_diff "$file"; then
-            timestamps["$file"]="$CURRENT_TIME"
-            echo "::debug::Updated timestamp for $file"
-          elif [ -z "${timestamps[$file]}" ]; then
-            timestamps["$file"]="$CURRENT_TIME"
-            echo "::debug::Initialized timestamp for $file"
+          target_file="target-repo/${{ secrets.TARGET_FOLDER }}/$file"
+          
+          # 检查当前文件是否有内容
+          if [ -s "$file" ] && grep -q '[^[:space:]]' "$file"; then
+            if check_diff "$file"; then
+              # 文件有变化，使用当前时间
+              timestamps["$file"]="$CURRENT_TIME"
+              echo "::debug::Updated timestamp for $file to $CURRENT_TIME (content changed)"
+            else
+              # 文件无变化，从Git历史获取最后提交时间
+              GIT_TIME=$(get_file_commit_time "$file")
+              if [ -n "$GIT_TIME" ]; then
+                timestamps["$file"]="$GIT_TIME"
+                echo "::debug::Using git commit time for $file: $GIT_TIME (no content change)"
+              else
+                # 如果Git历史中没有记录，保留原有时间戳或使用当前时间
+                timestamps["$file"]="$CURRENT_TIME"
+                echo "::debug::No git history for $file, using current time: $CURRENT_TIME"
+              fi
+            fi
+          else
+            echo "::debug::File $file has no content, skipping timestamp"
           fi
         done
 
         # 生成新的时间戳文件
-        printf "dizhi1.txt:%s\n" "${timestamps[dizhi1.txt]}" > timestamp.txt
-        printf "dizhi2.txt:%s\n" "${timestamps[dizhi2.txt]}" >> timestamp.txt
-        printf "dizhi3.txt:%s\n" "${timestamps[dizhi3.txt]}" >> timestamp.txt
+        printf "dizhi1.txt:%s\n" "${timestamps[dizhi1.txt]:-}" > timestamp.txt
+        printf "dizhi2.txt:%s\n" "${timestamps[dizhi2.txt]:-}" >> timestamp.txt
+        printf "dizhi3.txt:%s\n" "${timestamps[dizhi3.txt]:-}" >> timestamp.txt
+        
+        echo "::debug::Final timestamps: dizhi1=${timestamps[dizhi1.txt]:-}, dizhi2=${timestamps[dizhi2.txt]:-}, dizhi3=${timestamps[dizhi3.txt]:-}"
 
     - name: Copy files to target repository
       run: |
