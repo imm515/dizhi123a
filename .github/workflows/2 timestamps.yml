@@ -292,68 +292,10 @@ jobs:
         cp "$OUTPUT_FILE" "target-repo/${TARGET_FOLDER}/myDizhi_modified.txt"
         echo "::debug::Success! Processed myDizhi.txt with Domain/IP replacement (IPv6 Fixed)"
 
-    - name: Record End Time and Calculate Duration
-      id: end_time
+    - name: Save Start Time for Final Report
       run: |
-        END_TIME=$(date +'%Y-%m-%d %H:%M:%S')
-        START_SEC=$(date -d "${{ env.START_TIME }}" +%s)
-        END_SEC=$(date -d "$END_TIME" +%s)
-        DURATION=$((END_SEC - START_SEC))
-        FORMATTED_DURATION=$(printf "%02d:%02d:%02d" $((DURATION/3600)) $((DURATION%3600/60)) $((DURATION%60)))
-        echo "END_TIME=$END_TIME" >> $GITHUB_ENV
-        echo "DURATION=$FORMATTED_DURATION" >> $GITHUB_ENV
-
-    - name: Append Report Link to dizhiR.txt
-      run: |
-        # 读取时间戳文件
-        declare -A timestamp_dates
-        while IFS=: read -r key value; do
-          timestamp_dates["$key"]="$value"
-        done < "target-repo/${{ secrets.TARGET_FOLDER }}/timestamp.txt"
-
-        # 计算时间差
-        CURRENT_SEC=$(date +%s)
-        get_days_diff() {
-          local file_date="$1"
-          local file_sec=$(date -d "$file_date" +%s)
-          echo "scale=1; ($CURRENT_SEC - $file_sec)/86400" | bc -l | xargs printf "%.1f"
-        }
-
-        D1_DAYS=$(get_days_diff "${timestamp_dates[dizhi1.txt]}")
-        D2_DAYS=$(get_days_diff "${timestamp_dates[dizhi2.txt]}")
-        D3_DAYS=$(get_days_diff "${timestamp_dates[dizhi3.txt]}")
-
-        # 生成报告链接
-        echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${{ env.START_TIME }} 耗时: ${{ env.DURATION }}" > target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
-        echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}" >> target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
-
-    - name: Generate dizhi123.txt
-      run: |
-        {
-          # 合并原有节点文件（每个文件只输出一次）
-          cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi1.txt
-          echo -e
-          cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi2.txt
-          echo -e
-          cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhi3.txt
-          echo -e
-          # 添加处理后的 myDizhi 节点（包含 IP 替换）
-          if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi_modified.txt" ]; then
-            grep -E '^(vless|vmess|trojan)://' "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi_modified.txt"
-            echo -e
-          fi
-          cat target-repo/${{ secrets.TARGET_FOLDER }}/dizhiR.txt
-          echo -e
-          
-          # 新增：添加原始myDizhi.txt中的所有节点（包括gemini节点）
-          if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt" ]; then
-            echo "::debug::Processing updated myDizhi.txt"
-            
-            # 添加所有节点，包括gemini节点，不进行过滤
-            grep -E '^(vless|vmess|trojan|ss|ssr)://' "target-repo/${{ secrets.TARGET_FOLDER }}/myDizhi.txt"
-            echo "::debug::Extracted all nodes from modified myDizhi.txt (including gemini nodes)"
-          fi
-        } > target-repo/${{ secrets.TARGET_FOLDER }}/dizhi123.txt
+        # 保存开始时间到文件，供工作流5使用
+        echo "${{ env.START_TIME }}" > target-repo/${{ secrets.TARGET_FOLDER }}/workflow_start_time.txt
 
     - name: Commit and Push changes
       run: |
@@ -362,7 +304,7 @@ jobs:
         git config --global user.email "github-actions-bot@users.noreply.github.com"
         
         git add .
-        COMMIT_MESSAGE="Auto-update at ${{ env.END_TIME }}"
+        COMMIT_MESSAGE="Auto-update at ${{ env.START_TIME }}: Node data collection started"
         if git commit -m "$COMMIT_MESSAGE"; then
           git push origin main
         else

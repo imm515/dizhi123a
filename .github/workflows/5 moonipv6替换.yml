@@ -299,7 +299,105 @@ jobs:
             echo "::notice::No IPv6 nodes generated. Old IPv6 block was successfully removed."
           fi
 
-      - name: Commit and Push changes manually
+      - name: Record End Time and Generate Report
+        run: |
+          set -euo pipefail
+          
+          # 从工作流2保存的文件中读取开始时间
+          if [ -f "target-repo/${{ env.TARGET_FOLDER }}/workflow_start_time.txt" ]; then
+            START_TIME=$(cat "target-repo/${{ env.TARGET_FOLDER }}/workflow_start_time.txt")
+          else
+            # 如果文件不存在，使用当前时间作为开始时间
+            START_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+          fi
+          
+          # 记录结束时间并计算持续时间
+          END_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+          START_SEC=$(date -d "$START_TIME" +%s)
+          END_SEC=$(date -d "$END_TIME" +%s)
+          DURATION=$((END_SEC - START_SEC))
+          FORMATTED_DURATION=$(printf "%02d:%02d:%02d" $((DURATION/3600)) $((DURATION%3600/60)) $((DURATION%60)))
+          
+          # 读取时间戳文件
+          if [ -f "target-repo/${{ env.TARGET_FOLDER }}/timestamp.txt" ]; then
+            declare -A timestamp_dates
+            while IFS=: read -r key value; do
+              timestamp_dates["$key"]="$value"
+            done < "target-repo/${{ env.TARGET_FOLDER }}/timestamp.txt"
+
+            # 计算时间差
+            CURRENT_SEC=$(date +%s)
+            get_days_diff() {
+              local file_date="$1"
+              local file_sec=$(date -d "$file_date" +%s)
+              echo "scale=1; ($CURRENT_SEC - $file_sec)/86400" | bc -l | xargs printf "%.1f"
+            }
+
+            D1_DAYS=$(get_days_diff "${timestamp_dates[dizhi1.txt]}")
+            D2_DAYS=$(get_days_diff "${timestamp_dates[dizhi2.txt]}")
+            D3_DAYS=$(get_days_diff "${timestamp_dates[dizhi3.txt]}")
+          else
+            D1_DAYS=0
+            D2_DAYS=0
+            D3_DAYS=0
+          fi
+
+          # 生成报告节点
+          {
+            echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A $START_TIME 耗时: $FORMATTED_DURATION"
+            echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A vm:${D1_DAYS} vl:${D2_DAYS} ss:${D3_DAYS}"
+          } > "target-repo/${{ env.TARGET_FOLDER }}/dizhiR.txt"
+          
+          echo "::notice::Report generated with start time: $START_TIME, end time: $END_TIME, duration: $FORMATTED_DURATION"
+
+      - name: Generate Final dizhi123.txt
+        run: |
+          set -euo pipefail
+          
+          TARGET_DIR="target-repo/${{ env.TARGET_FOLDER }}"
+          
+          # 生成最终的dizhi123.txt文件
+          {
+            # 合并原有节点文件（每个文件只输出一次）
+            cat "$TARGET_DIR/dizhi1.txt" 2>/dev/null || true
+            echo
+            cat "$TARGET_DIR/dizhi2.txt" 2>/dev/null || true
+            echo
+            cat "$TARGET_DIR/dizhi3.txt" 2>/dev/null || true
+            echo
+            
+            # 添加处理后的 myDizhi 节点（包含 IP 替换）
+            if [ -f "$TARGET_DIR/myDizhi_modified.txt" ]; then
+              grep -E '^(vless|vmess|trojan)://' "$TARGET_DIR/myDizhi_modified.txt" || true
+              echo
+            fi
+            
+            # 添加IPv6节点（如果存在）
+            IPV6_COUNT="${{ steps.node_gen.outputs.ipv6_count }}"
+            if [ "$IPV6_COUNT" -gt 0 ] && [ -f "$TARGET_DIR/myDizhi_ipv6_modified.txt" ]; then
+              echo "--- 新增${IPV6_COUNT}个分组端口IPv6总节点 (GMT+8: $(date +'%Y-%m-%d %H:%M:%S')) ---"
+              cat "$TARGET_DIR/myDizhi_ipv6_modified.txt"
+              echo "------------------------------------------------------------------"
+              echo
+            fi
+            
+            # 添加报告节点
+            cat "$TARGET_DIR/dizhiR.txt"
+            echo
+            
+            # 添加原始myDizhi.txt中的所有节点（包括gemini节点）
+            if [ -f "$TARGET_DIR/myDizhi.txt" ]; then
+              echo "::debug::Processing updated myDizhi.txt"
+              
+              # 添加所有节点，包括gemini节点，不进行过滤
+              grep -E '^(vless|vmess|trojan|ss|ssr)://' "$TARGET_DIR/myDizhi.txt" || true
+              echo "::debug::Extracted all nodes from modified myDizhi.txt (including gemini nodes)"
+            fi
+          } > "$TARGET_DIR/dizhi123.txt"
+          
+          echo "::notice::Final dizhi123.txt generated successfully"
+
+      - name: Commit and Push all changes
         run: |
           set -euo pipefail
 
@@ -308,16 +406,17 @@ jobs:
           git config user.name "GitHub Actions Bot"
           git config user.email "github-actions-bot@users.noreply.github.com"
           
-          FILE_PATH="${{ env.TARGET_FOLDER }}/dizhi123.txt"
-          
-          git add "$FILE_PATH"
+          # 添加所有修改的文件
+          git add "${{ env.TARGET_FOLDER }}/" || true
           
           if ! git diff --cached --quiet --exit-code; then
-              echo "Committing changes to $FILE_PATH..."
-              # 提交信息使用总节点数
-              git commit -m "Auto-update: Inserted ${{ steps.node_gen.outputs.ipv6_count }} grouped IPv6 VLESS nodes into dizhi123.txt"
+              echo "Committing all changes..."
+              # 提交信息使用总节点数和时间信息
+              START_TIME=$(cat "${{ env.TARGET_FOLDER }}/workflow_start_time.txt" 2>/dev/null || echo "$(date +'%Y-%m-%d %H:%M:%S')")
+              IPV6_COUNT="${{ steps.node_gen.outputs.ipv6_count }}"
+              git commit -m "Auto-update at $(date +'%Y-%m-%d %H:%M:%S'): Generated $IPV6_COUNT IPv6 nodes and final report"
               git push
-              echo "::notice::Successfully committed and pushed changes."
+              echo "::notice::Successfully committed and pushed all changes."
           else
-              echo "No changes detected in $FILE_PATH. Skipping commit."
+              echo "No changes detected. Skipping commit."
           fi
