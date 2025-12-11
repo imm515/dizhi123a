@@ -1,4 +1,4 @@
-name: 4 Selenium IPv6 改用时间戳
+name: 4 Selenium IPv6 聚合与时间记录
 
 on:
   workflow_dispatch:
