@@ -124,7 +124,7 @@ jobs:
           cp -v "target-repo/${{ secrets.TARGET_FOLDER }}/myIP.txt" ./
         fi
 
-    - name: Process myDizhi.txt with IP/Port Replacement (DEBUG VERSION)
+    - name: Process myDizhi.txt with IP/Port Replacement (FIXED IPv6)
       run: |
         # 1. 定义路径和检查文件
         TARGET_FOLDER="${{ secrets.TARGET_FOLDER }}"
@@ -143,14 +143,14 @@ jobs:
           exit 0
         fi
 
-        # [cite_start]2. 提取 IP/域名 池 (修改版：支持域名直接读取) [cite: 142-455]
-        # 逻辑：匹配 @ 之后，直到遇到 ?、# 或行尾之前的非空字符。这可以同时捕获 "IP:Port" 和 "Domain:Port"
-        # 并不做格式校验，视同有效地址处理。
+        # 2. 提取 IP/域名 池
+        # 逻辑：匹配 @ 之后，直到遇到 ?、# 或行尾之前的非空字符。
         mapfile -t NORMAL_IP_POOL < <(grep -v "gemini" "$TARGET_MYIP" | grep -oP '@\K[^?#\s]+' | grep ':')
         mapfile -t GEMINI_IP_POOL < <(grep "gemini" "$TARGET_MYIP" | grep -oP '@\K[^?#\s]+' | grep ':')
 
         NORMAL_POOL_SIZE=${#NORMAL_IP_POOL[@]}
         GEMINI_POOL_SIZE=${#GEMINI_IP_POOL[@]}
+
         echo "::debug::IP Pool Check: Found $NORMAL_POOL_SIZE normal Addrs and $GEMINI_POOL_SIZE gemini Addrs."
 
         if [ "$NORMAL_POOL_SIZE" -eq 0 ]; then
@@ -163,6 +163,8 @@ jobs:
         NORMAL_COUNTER=0
         GEMINI_COUNTER=0
         > "$OUTPUT_FILE"
+
+        # 提取待处理节点
         grep -E '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" > /tmp/nodes.txt
 
         echo "::debug::Starting node processing loop..."
@@ -179,6 +181,7 @@ jobs:
           # --- VMess 节点处理 ---
           if [[ "$line" =~ ^vmess:// ]]; then
             BASE64_STR=${line#vmess://}
+            # 修复 Base64 解码可能的填充问题
             CLEAN_BASE64_STR=$(echo "$BASE64_STR" | tr -d '\r\n\t ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             
             JSON_STR=$(echo "$CLEAN_BASE64_STR" | base64 -d 2>/dev/null || echo "")
@@ -212,17 +215,20 @@ jobs:
                 USE_POOL="Normal"
               fi
 
-              # 获取当前轮询到的地址串 (格式如 www.visa.com:443 或 1.1.1.1:80)
+              # [关键修复] 获取新地址并正确分离端口
               CURRENT_PAIR="${POOL_ARRAY[$IDX]}"
               
-              # 提取 Host 和 Port (利用 Bash 字符串操作分离最后一个冒号)
+              # 使用 ##*: 匹配最后一个冒号，确保 IPv6 [::1]:443 能正确提取 443
+              NEW_PORT=${CURRENT_PAIR##*:}
+              # 使用 %:* 删除最后一个冒号及其后的内容
               NEW_IP=${CURRENT_PAIR%:*}
-              NEW_PORT=${CURRENT_PAIR#*:}
+              
+              # [关键修复] VMess JSON 的 add 字段通常不需要方括号
+              # 如果 NEW_IP 包含 []，则去掉，用于 JSON
+              JSON_IP=$(echo "$NEW_IP" | tr -d '[]')
 
-              # 替换并重新编码 (jq 会自动处理字符串引号，所以域名和IP都适用)
-              NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$NEW_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
+              NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$JSON_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
               NEW_BASE64=$(echo -n "$NEW_JSON" | base64 -w 0)
-
               echo "vmess://$NEW_BASE64" >> "$OUTPUT_FILE"
               echo "::debug::Line $LINE_NUM: **$USE_POOL VMess Updated** -> Addr: $NEW_IP, Port: $NEW_PORT"
 
@@ -251,18 +257,20 @@ jobs:
               USE_POOL="Normal"
             fi
 
-            # 如果确定了池，并且正则匹配原始链接成功，则进行替换
-            # 正则说明：匹配 协议://UUID@原有Host:原有Port?参数
-            if [ -n "$USE_POOL" ] && [[ "$line" =~ ^([a-z]+)://([^@]+)@([^:]+):([0-9]+)(.*)$ ]]; then
+            # [关键修复] 增强正则以支持 IPv6 作为目标节点
+            # 旧正则: ([^:]+) 会在 IPv6 的冒号处断开
+            # 新正则: 匹配 @ 之后，直到遇到 / ? # 之前的字符串作为 HOST:PORT 块
+            if [ -n "$USE_POOL" ] && [[ "$line" =~ ^([a-z]+)://([^@]+)@([^/?#]+)(.*)$ ]]; then
               USER_INFO="${BASH_REMATCH[2]}"
-              REST_PARAMS="${BASH_REMATCH[5]}"
+              OLD_ADDR_BLOCK="${BASH_REMATCH[3]}"
+              REST_PARAMS="${BASH_REMATCH[4]}"
               
               # 获取新地址
               CURRENT_PAIR="${POOL_ARRAY[$IDX]}"
-              NEW_IP=${CURRENT_PAIR%:*}
-              NEW_PORT=${CURRENT_PAIR#*:}
+              NEW_IP=${CURRENT_PAIR%:*}     # 这里保留方括号，如 [::1]
+              NEW_PORT=${CURRENT_PAIR##*:}  # 这里使用 ## 修复端口提取
 
-              # 拼接新链接 (直接填入 NEW_IP，即使是域名也可以)
+              # 拼接新链接 (VLESS URI 必须保留 IPv6 的方括号)
               echo "${PROTOCOL}://${USER_INFO}@${NEW_IP}:${NEW_PORT}${REST_PARAMS}" >> "$OUTPUT_FILE"
               echo "::debug::Line $LINE_NUM: **$USE_POOL ${PROTOCOL} Updated** -> Addr: $NEW_IP, Port: $NEW_PORT"
             else
@@ -282,7 +290,7 @@ jobs:
         grep -vE '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" >> "$OUTPUT_FILE"
         mkdir -p "target-repo/${TARGET_FOLDER}"
         cp "$OUTPUT_FILE" "target-repo/${TARGET_FOLDER}/myDizhi_modified.txt"
-        echo "::debug::Success! Processed myDizhi.txt with Domain/IP replacement"
+        echo "::debug::Success! Processed myDizhi.txt with Domain/IP replacement (IPv6 Fixed)"
 
     - name: Record End Time and Calculate Duration
       id: end_time
