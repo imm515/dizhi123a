@@ -9,7 +9,7 @@ on:
         default: '6'
         type: string
   workflow_run:
-    workflows: ["4 Selenium IPv6 改用时间戳"]
+    workflows: ["4 Selenium IPv6聚合与时间记录"]
     types:
       - completed 
 
@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TZ: Asia/Shanghai
-      # 沿用 2.yml 的 secrets 配置
+      # 沿用 3.yml 的 secrets 配置
       TARGET_FOLDER: ${{ secrets.TARGET_FOLDER }}
       # 目标生成数量（每组），默认为 6
       VLESS_COUNT: ${{ github.event.inputs.vless_count || '6' }}
