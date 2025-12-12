@@ -9,7 +9,7 @@ on:
         default: '6'
         type: string
   workflow_run:
-    workflows: ["4 Selenium IPv6聚合与时间记录"]
+    workflows: ["4 Selenium IPv6 聚合与时间记录"]
     types:
       - completed 
 
