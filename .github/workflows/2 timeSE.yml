@@ -1,0 +1,272 @@
+name: 2 Time (Independent)
+
+on:
+  schedule:
+    - cron: '35 */8 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  update-nodes:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Shanghai
+
+    steps:
+    - name: Checkout current repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y jq google-chrome-stable
+        pip install selenium webdriver-manager
+
+    - name: Record Start Time
+      id: start_time
+      run: |
+        echo "START_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
+    - name: Fetch Dynamic Content with Selenium
+      env:
+        VMESS_URL: ${{ secrets.VMESS_URL }}
+        SS_URL: ${{ secrets.SS_URL }}
+      run: |
+        python - <<EOF
+        import os
+        import time
+        from selenium import webdriver
+        from selenium.webdriver.chrome.service import Service
+        from selenium.webdriver.chrome.options import Options
+        from webdriver_manager.chrome import ChromeDriverManager
+
+        def fetch_content(url, output_file):
+            if not url:
+                print(f"URL is empty, skipping {output_file}")
+                return
+            
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            
+            # 使用自动管理的驱动
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+            try:
+                print(f"Fetching: {url}")
+                driver.get(url)
+                # 显式等待：动态内容加载通常需要一些时间
+                time.sleep(10) 
+                # 获取整个 body 的文本内容，类似于原本 curl 的效果
+                content = driver.find_element("tag name", "body").text
+                with open(output_file, "w", encoding="utf-8") as f:
+                    f.write(content)
+                print(f"Successfully saved to {output_file}")
+            except Exception as e:
+                print(f"Error fetching {url}: {e}")
+            finally:
+                driver.quit()
+
+        fetch_content(os.environ.get("VMESS_URL"), "webpage_content.txt")
+        fetch_content(os.environ.get("SS_URL"), "ss_webpage_content.txt")
+        EOF
+
+    - name: Fetch and Update Nodes from Content Files
+      run: |
+        # 提取逻辑保持不变，确保如果没搜到内容不报错退出
+        VMESS_NODES=$(grep -oP 'vmess://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u) || true
+        VLESS_NODES=$(grep -oP 'vless://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u) || true
+        SS_NODES=$(grep -oP '(ss://|ssr://)\S+' ss_webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u) || true
+        
+        echo "$VMESS_NODES" > dizhi1.txt
+        echo "$VLESS_NODES" > dizhi2.txt
+        echo "$SS_NODES" > dizhi3.txt
+
+    - name: Checkout target repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ secrets.TARGET_REPO }}
+        token: ${{ secrets.TARGET_PAT }}
+        path: target-repo
+        fetch-depth: 0
+
+    - name: Retrieve existing timestamp
+      run: |
+        if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/timestamp.txt" ]; then
+          cp "target-repo/${{ secrets.TARGET_FOLDER }}/timestamp.txt" ./ || true
+        fi
+
+    - name: Update timestamp file
+      run: |
+        CURRENT_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+        declare -A timestamps
+        
+        get_file_commit_time() {
+          local file="$1"
+          cd "target-repo/${{ secrets.TARGET_FOLDER }}"
+          GIT_TIMESTAMP=$(git log -1 --format="%ci" -- "$file" 2>/dev/null | head -1 | cut -d' ' -f1,2 | sed 's/T/ /')
+          cd - > /dev/null
+          echo "$GIT_TIMESTAMP"
+        }
+
+        check_diff() {
+          local file="$1"
+          local target_file="target-repo/${{ secrets.TARGET_FOLDER }}/$file"
+          if [ ! -s "$file" ] || ! grep -q '[^[:space:]]' "$file"; then return 1; fi
+          if [ ! -f "$target_file" ]; then return 0; fi
+          if [ ! -s "$target_file" ] || ! grep -q '[^[:space:]]' "$target_file"; then return 0; fi
+          if ! diff -q "$file" "$target_file" >/dev/null; then return 0; fi
+          return 1
+        }
+
+        for i in 1 2 3; do
+          file="dizhi${i}.txt"
+          if [ -s "$file" ] && grep -q '[^[:space:]]' "$file"; then
+            if check_diff "$file"; then
+              timestamps["$file"]="$CURRENT_TIME"
+            else
+              GIT_TIME=$(get_file_commit_time "$file")
+              timestamps["$file"]="${GIT_TIME:-$CURRENT_TIME}"
+            fi
+          fi
+        done
+
+        printf "dizhi1.txt:%s\n" "${timestamps[dizhi1.txt]:-}" > timestamp.txt
+        printf "dizhi2.txt:%s\n" "${timestamps[dizhi2.txt]:-}" >> timestamp.txt
+        printf "dizhi3.txt:%s\n" "${timestamps[dizhi3.txt]:-}" >> timestamp.txt
+
+    - name: Copy files to target repository
+      run: |
+        cp -v dizhi*.txt ss_webpage_content.txt webpage_content.txt timestamp.txt "target-repo/${{ secrets.TARGET_FOLDER }}/"
+        if [ -f "target-repo/${{ secrets.TARGET_FOLDER }}/myIP.txt" ]; then
+          cp -v "target-repo/${{ secrets.TARGET_FOLDER }}/myIP.txt" ./
+        fi
+
+    - name: Process myDizhi.txt with IP/Port Replacement
+      run: |
+        TARGET_FOLDER="${{ secrets.TARGET_FOLDER }}"
+        TARGET_MYDIZHI="target-repo/${TARGET_FOLDER}/myDizhi.txt"
+        TARGET_MYIP="target-repo/${TARGET_FOLDER}/myIP.txt"
+        OUTPUT_FILE="myDizhi_modified.txt"
+
+        if [ ! -f "$TARGET_MYDIZHI" ]; then exit 0; fi
+        if [ ! -f "$TARGET_MYIP" ]; then cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"; exit 0; fi
+
+        mapfile -t NORMAL_IP_POOL < <(grep -v "gemini" "$TARGET_MYIP" | grep -oP '@\K[^?#\s]+' | grep ':')
+        mapfile -t GEMINI_IP_POOL < <(grep "gemini" "$TARGET_MYIP" | grep -oP '@\K[^?#\s]+' | grep ':')
+        NORMAL_POOL_SIZE=${#NORMAL_IP_POOL[@]}
+        GEMINI_POOL_SIZE=${#GEMINI_IP_POOL[@]}
+
+        if [ "$NORMAL_POOL_SIZE" -eq 0 ]; then cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"; exit 0; fi
+
+        NORMAL_COUNTER=0
+        GEMINI_COUNTER=0
+        > "$OUTPUT_FILE"
+        grep -E '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" > /tmp/nodes.txt
+
+        while IFS= read -r line; do
+          line=$(echo "$line" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          if [[ "$line" =~ ^vmess:// ]]; then
+            BASE64_STR=${line#vmess://}
+            JSON_STR=$(echo "$BASE64_STR" | base64 -d 2>/dev/null || echo "")
+            if [ -n "$JSON_STR" ] && echo "$JSON_STR" | jq empty 2>/dev/null; then
+              if echo "$JSON_STR" | grep -q "gemini" && [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
+                POOL_ARRAY=("${GEMINI_IP_POOL[@]}"); IDX=$((GEMINI_COUNTER % GEMINI_POOL_SIZE)); GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
+              else
+                POOL_ARRAY=("${NORMAL_IP_POOL[@]}"); IDX=$((NORMAL_COUNTER % NORMAL_POOL_SIZE)); NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
+              fi
+              CURRENT_PAIR="${POOL_ARRAY[$IDX]}"
+              NEW_PORT=${CURRENT_PAIR##*:}; NEW_IP=${CURRENT_PAIR%:*}
+              JSON_IP=$(echo "$NEW_IP" | tr -d '[]')
+              NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$JSON_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
+              echo "vmess://$(echo -n "$NEW_JSON" | base64 -w 0)" >> "$OUTPUT_FILE"
+            else
+              echo "$line" >> "$OUTPUT_FILE"
+            fi
+          elif [[ "$line" =~ ^(vless|trojan):// ]]; then
+            PROTO="${BASH_REMATCH[1]}"
+            if echo "$line" | grep -q "gemini" && [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
+              POOL_ARRAY=("${GEMINI_IP_POOL[@]}"); IDX=$((GEMINI_COUNTER % GEMINI_POOL_SIZE)); GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
+            else
+              POOL_ARRAY=("${NORMAL_IP_POOL[@]}"); IDX=$((NORMAL_COUNTER % NORMAL_POOL_SIZE)); NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
+            fi
+            if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^/?#]+)(.*)$ ]]; then
+              CURRENT_PAIR="${POOL_ARRAY[$IDX]}"
+              echo "${PROTO}://${BASH_REMATCH[2]}@${CURRENT_PAIR%:*}:${CURRENT_PAIR##*:}${BASH_REMATCH[4]}" >> "$OUTPUT_FILE"
+            else
+              echo "$line" >> "$OUTPUT_FILE"
+            fi
+          else
+            echo "$line" >> "$OUTPUT_FILE"
+          fi
+        done < /tmp/nodes.txt
+        grep -vE '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" >> "$OUTPUT_FILE"
+        cp "$OUTPUT_FILE" "target-repo/${TARGET_FOLDER}/myDizhi_modified.txt"
+
+    - name: Generate Report
+      run: |
+        END_TIME=$(date +'%Y-%m-%d %H:%M:%S')
+        START_SEC=$(date -d "${{ env.START_TIME }}" +%s)
+        END_SEC=$(date -d "$END_TIME" +%s)
+        FORMATTED_DURATION=$(printf "%02d:%02d:%02d" $(( (END_SEC-START_SEC)/3600 )) $(( (END_SEC-START_SEC)%3600/60 )) $(( (END_SEC-START_SEC)%60 )))
+        
+        CURRENT_SEC=$(date +%s)
+        declare -A D_DAYS
+        if [ -f "timestamp.txt" ]; then
+          while IFS=: read -r key value; do
+            if [ -n "$value" ]; then
+              FILE_SEC=$(date -d "$value" +%s 2>/dev/null || echo 0)
+              D_DAYS["$key"]=$(awk "BEGIN {printf \"%.1f\", ($CURRENT_SEC - $FILE_SEC)/86400}")
+            else
+              D_DAYS["$key"]="0"
+            fi
+          done < timestamp.txt
+        fi
+
+        {
+          echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A ${{ env.START_TIME }} 耗时: $FORMATTED_DURATION"
+          echo "trojan://CMLiussss@127.0.0.1:8888?security=tls&allowInsecure=1&type=tcp&headerType=none#%23报告A vm:${D_DAYS[dizhi1.txt]:-0} vl:${D_DAYS[dizhi2.txt]:-0} ss:${D_DAYS[dizhi3.txt]:-0}"
+        } > "dizhiR.txt"
+        cp "dizhiR.txt" "target-repo/${{ secrets.TARGET_FOLDER }}/"
+
+    - name: Generate dizhi123.txt
+      run: |
+        TARGET_DIR="target-repo/${{ secrets.TARGET_FOLDER }}"
+        {
+          cat "$TARGET_DIR/dizhi1.txt" "$TARGET_DIR/dizhi2.txt" "$TARGET_DIR/dizhi3.txt" 2>/dev/null || true
+          echo
+          [ -f "$TARGET_DIR/myDizhi_modified.txt" ] && grep -E '^(vless|vmess|trojan)://' "$TARGET_DIR/myDizhi_modified.txt" || true
+          echo
+          cat "$TARGET_DIR/dizhiR.txt"
+          echo
+          [ -f "$TARGET_DIR/myDizhi.txt" ] && grep -E '^(vless|vmess|trojan|ss|ssr)://' "$TARGET_DIR/myDizhi.txt" || true
+        } > "$TARGET_DIR/dizhi123.txt"
+
+    - name: Commit and Push changes
+      run: |
+        cd target-repo
+        git config --global user.name "GitHub Actions Bot"
+        git config --global user.email "github-actions-bot@users.noreply.github.com"
+        git add .
+        git commit -m "Auto-update at ${{ env.START_TIME }}: Node data via Selenium" || exit 0
+        git push origin main
+
+    - name: Delete workflow runs
+      uses: Mattraks/delete-workflow-runs@v2
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        repository: ${{ github.repository }}
+        retain_days: 0
+        keep_minimum_runs: 2
