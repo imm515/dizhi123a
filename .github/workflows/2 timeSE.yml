@@ -20,6 +20,11 @@ jobs:
       TZ: Asia/Shanghai
 
     steps:
+    - name: Record Start Time
+      id: start_time
+      run: |
+        echo "START_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
+
     - name: Checkout current repository
       uses: actions/checkout@v4
 
@@ -33,11 +38,6 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y jq google-chrome-stable
         pip install selenium webdriver-manager
-
-    - name: Record Start Time
-      id: start_time
-      run: |
-        echo "START_TIME=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_ENV
 
     - name: Fetch Dynamic Content with Selenium
       env:
