@@ -62,14 +62,11 @@ jobs:
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
             
-            # 使用自动管理的驱动
             driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
             try:
                 print(f"Fetching: {url}")
                 driver.get(url)
-                # 显式等待：动态内容加载通常需要一些时间
                 time.sleep(10) 
-                # 获取整个 body 的文本内容，类似于原本 curl 的效果
                 content = driver.find_element("tag name", "body").text
                 with open(output_file, "w", encoding="utf-8") as f:
                     f.write(content)
@@ -85,7 +82,6 @@ jobs:
 
     - name: Fetch and Update Nodes from Content Files
       run: |
-        # 提取逻辑保持不变，确保如果没搜到内容不报错退出
         VMESS_NODES=$(grep -oP 'vmess://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u) || true
         VLESS_NODES=$(grep -oP 'vless://\S+' webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u) || true
         SS_NODES=$(grep -oP '(ss://|ssr://)\S+' ss_webpage_content.txt | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s/&amp;/\&/g' | sort -u) || true
@@ -164,8 +160,11 @@ jobs:
         if [ ! -f "$TARGET_MYDIZHI" ]; then exit 0; fi
         if [ ! -f "$TARGET_MYIP" ]; then cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"; exit 0; fi
 
-        mapfile -t NORMAL_IP_POOL < <(grep -v "gemini" "$TARGET_MYIP" | grep -oP '@\K[^?#\s]+' | grep ':')
-        mapfile -t GEMINI_IP_POOL < <(grep "gemini" "$TARGET_MYIP" | grep -oP '@\K[^?#\s]+' | grep ':')
+        # 关键修正：移除 sort -u，改用 awk '!x[$0]++' 保持原始物理顺序并去重
+        # 同时加入 tr -d '\r' 清除 Windows 换行符，防止勾稽关系匹配失败
+        mapfile -t NORMAL_IP_POOL < <(grep -v "gemini" "$TARGET_MYIP" | tr -d '\r' | grep -oP '@\K[^?#\s]+' | grep ':' | awk '!x[$0]++')
+        mapfile -t GEMINI_IP_POOL < <(grep "gemini" "$TARGET_MYIP" | tr -d '\r' | grep -oP '@\K[^?#\s]+' | grep ':' | awk '!x[$0]++')
+        
         NORMAL_POOL_SIZE=${#NORMAL_IP_POOL[@]}
         GEMINI_POOL_SIZE=${#GEMINI_IP_POOL[@]}
 
