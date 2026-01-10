@@ -160,15 +160,12 @@ jobs:
         if [ ! -f "$TARGET_MYDIZHI" ]; then exit 0; fi
         if [ ! -f "$TARGET_MYIP" ]; then cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"; exit 0; fi
 
-        # 关键修正：移除 sort -u，改用 awk '!x[$0]++' 保持原始物理顺序并去重
-        # 同时加入 tr -d '\r' 清除 Windows 换行符，防止勾稽关系匹配失败
+        # 移除 sort -u，改用 awk '!x[$0]++' 保持原始物理顺序并去重
         mapfile -t NORMAL_IP_POOL < <(grep -v "gemini" "$TARGET_MYIP" | tr -d '\r' | grep -oP '@\K[^?#\s]+' | grep ':' | awk '!x[$0]++')
         mapfile -t GEMINI_IP_POOL < <(grep "gemini" "$TARGET_MYIP" | tr -d '\r' | grep -oP '@\K[^?#\s]+' | grep ':' | awk '!x[$0]++')
         
         NORMAL_POOL_SIZE=${#NORMAL_IP_POOL[@]}
         GEMINI_POOL_SIZE=${#GEMINI_IP_POOL[@]}
-
-        if [ "$NORMAL_POOL_SIZE" -eq 0 ]; then cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"; exit 0; fi
 
         NORMAL_COUNTER=0
         GEMINI_COUNTER=0
@@ -177,40 +174,65 @@ jobs:
 
         while IFS= read -r line; do
           line=$(echo "$line" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          
+          IS_GEMINI=false
+          JSON_STR=""
+          
+          # 1. 深度判定判定阶段 (VMess 解密检查)
           if [[ "$line" =~ ^vmess:// ]]; then
             BASE64_STR=${line#vmess://}
             JSON_STR=$(echo "$BASE64_STR" | base64 -d 2>/dev/null || echo "")
+            # 同时检查解密后的内容和原始链接(备注)
+            if echo "$JSON_STR" | grep -qi "gemini" || echo "$line" | grep -qi "gemini"; then
+              IS_GEMINI=true
+            fi
+          else
+            # Vless/Trojan 直接查整行
+            if echo "$line" | grep -qi "gemini"; then
+              IS_GEMINI=true
+            fi
+          fi
+
+          # 2. 检查专用/通用池子并决定是否跳过分配
+          if [ "$IS_GEMINI" = true ]; then
+            if [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
+              POOL_ARRAY=("${GEMINI_IP_POOL[@]}"); IDX=$((GEMINI_COUNTER % GEMINI_POOL_SIZE)); GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
+            else
+              # 判定为 gemini 但无 IP，跳过分配，保留原样
+              echo "$line" >> "$OUTPUT_FILE"
+              continue
+            fi
+          else
+            if [ "$NORMAL_POOL_SIZE" -gt 0 ]; then
+              POOL_ARRAY=("${NORMAL_IP_POOL[@]}"); IDX=$((NORMAL_COUNTER % NORMAL_POOL_SIZE)); NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
+            else
+              # 池子为空，保留原样
+              echo "$line" >> "$OUTPUT_FILE"
+              continue
+            fi
+          fi
+
+          # 3. 执行替换物理操作
+          CURRENT_PAIR="${POOL_ARRAY[$IDX]}"
+          NEW_PORT=${CURRENT_PAIR##*:}; NEW_IP=${CURRENT_PAIR%:*}
+
+          if [[ "$line" =~ ^vmess:// ]]; then
+            # 只有当解密成功且是合法的 JSON 时才处理
             if [ -n "$JSON_STR" ] && echo "$JSON_STR" | jq empty 2>/dev/null; then
-              if echo "$JSON_STR" | grep -q "gemini" && [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
-                POOL_ARRAY=("${GEMINI_IP_POOL[@]}"); IDX=$((GEMINI_COUNTER % GEMINI_POOL_SIZE)); GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
-              else
-                POOL_ARRAY=("${NORMAL_IP_POOL[@]}"); IDX=$((NORMAL_COUNTER % NORMAL_POOL_SIZE)); NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
-              fi
-              CURRENT_PAIR="${POOL_ARRAY[$IDX]}"
-              NEW_PORT=${CURRENT_PAIR##*:}; NEW_IP=${CURRENT_PAIR%:*}
               JSON_IP=$(echo "$NEW_IP" | tr -d '[]')
               NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$JSON_IP" --arg port "$NEW_PORT" '.add = $ip | .port = $port')
               echo "vmess://$(echo -n "$NEW_JSON" | base64 -w 0)" >> "$OUTPUT_FILE"
             else
               echo "$line" >> "$OUTPUT_FILE"
             fi
-          elif [[ "$line" =~ ^(vless|trojan):// ]]; then
+          elif [[ "$line" =~ ^([a-z]+)://([^@]+)@([^/?#]+)(.*)$ ]]; then
             PROTO="${BASH_REMATCH[1]}"
-            if echo "$line" | grep -q "gemini" && [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
-              POOL_ARRAY=("${GEMINI_IP_POOL[@]}"); IDX=$((GEMINI_COUNTER % GEMINI_POOL_SIZE)); GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
-            else
-              POOL_ARRAY=("${NORMAL_IP_POOL[@]}"); IDX=$((NORMAL_COUNTER % NORMAL_POOL_SIZE)); NORMAL_COUNTER=$((NORMAL_COUNTER + 1))
-            fi
-            if [[ "$line" =~ ^([a-z]+)://([^@]+)@([^/?#]+)(.*)$ ]]; then
-              CURRENT_PAIR="${POOL_ARRAY[$IDX]}"
-              echo "${PROTO}://${BASH_REMATCH[2]}@${CURRENT_PAIR%:*}:${CURRENT_PAIR##*:}${BASH_REMATCH[4]}" >> "$OUTPUT_FILE"
-            else
-              echo "$line" >> "$OUTPUT_FILE"
-            fi
+            echo "${PROTO}://${BASH_REMATCH[2]}@${NEW_IP}:${NEW_PORT}${BASH_REMATCH[4]}" >> "$OUTPUT_FILE"
           else
             echo "$line" >> "$OUTPUT_FILE"
           fi
         done < /tmp/nodes.txt
+
         grep -vE '^(vless|vmess|trojan)://' "$TARGET_MYDIZHI" >> "$OUTPUT_FILE"
         cp "$OUTPUT_FILE" "target-repo/${TARGET_FOLDER}/myDizhi_modified.txt"
 
