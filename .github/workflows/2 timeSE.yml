@@ -158,17 +158,24 @@ jobs:
         OUTPUT_FILE="myDizhi_modified.txt"
 
         # ==========================================
-        # DEBUG/配置位置: 默认不改动端口
+        # DEBUG/配置位置
         # ==========================================
         KEEP_ORIGINAL_PORT=true  # true: 保留原端口; false: 强制替换为 IP 池中的端口
         echo "LOG: KEEP_ORIGINAL_PORT is set to $KEEP_ORIGINAL_PORT"
+        echo "LOG: EXACT_MATCH_TAGS is set to $EXACT_MATCH_TAGS"
         # ==========================================
 
         if [ ! -f "$TARGET_MYDIZHI" ]; then exit 0; fi
         if [ ! -f "$TARGET_MYIP" ]; then cp "$TARGET_MYDIZHI" "$OUTPUT_FILE"; exit 0; fi
 
-        mapfile -t NORMAL_IP_POOL < <(grep -v "gemini" "$TARGET_MYIP" | tr -d '\r' | grep -oP '@\K[^?#\s]+' | grep ':' | awk '!x[$0]++')
-        mapfile -t GEMINI_IP_POOL < <(grep "gemini" "$TARGET_MYIP" | tr -d '\r' | grep -oP '@\K[^?#\s]+' | grep ':' | awk '!x[$0]++')
+        # 构造 IP 池提取正则：模糊包含 gemini OR 结尾标签精确匹配
+        SPECIAL_PATTERN="gemini"
+        for tag in $EXACT_MATCH_TAGS; do
+          SPECIAL_PATTERN="${SPECIAL_PATTERN}|#${tag}$"
+        done
+
+        mapfile -t GEMINI_IP_POOL < <(grep -Ei "$SPECIAL_PATTERN" "$TARGET_MYIP" | tr -d '\r' | grep -oP '@\K[^?#\s]+' | grep ':' | awk '!x[$0]++')
+        mapfile -t NORMAL_IP_POOL < <(grep -vEi "$SPECIAL_PATTERN" "$TARGET_MYIP" | tr -d '\r' | grep -oP '@\K[^?#\s]+' | grep ':' | awk '!x[$0]++')
         
         NORMAL_POOL_SIZE=${#NORMAL_IP_POOL[@]}
         GEMINI_POOL_SIZE=${#GEMINI_IP_POOL[@]}
@@ -181,30 +188,40 @@ jobs:
         while IFS= read -r line; do
           line=$(echo "$line" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
           
-          IS_GEMINI=false
+          IS_SPECIAL=false
           JSON_STR=""
-          
-          # 1. 深度判定判定阶段 (VMess 解密检查)
+          REMARK=""
+
+          # 1. 提取备注信息并判定分类
           if [[ "$line" =~ ^vmess:// ]]; then
             BASE64_STR=${line#vmess://}
             JSON_STR=$(echo "$BASE64_STR" | base64 -d 2>/dev/null || echo "")
             # 同时检查解密后的内容和原始链接(备注)
             if echo "$JSON_STR" | grep -qi "gemini" || echo "$line" | grep -qi "gemini"; then
-              IS_GEMINI=true
+              IS_SPECIAL=true
+            else
+              for tag in $EXACT_MATCH_TAGS; do
+                if [[ "${REMARK,,}" == "${tag,,}" ]]; then IS_SPECIAL=true; break; fi
+              done
             fi
           else
-            # Vless/Trojan 直接查整行
+            # Vless/Trojan 提取 # 后的备注
+            REMARK=$(echo "$line" | sed 's/.*#//' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            # 判定：模糊包含 gemini 或 精确等于指定标签
             if echo "$line" | grep -qi "gemini"; then
-              IS_GEMINI=true
+              IS_SPECIAL=true
+            else
+              for tag in $EXACT_MATCH_TAGS; do
+                if [[ "${REMARK,,}" == "${tag,,}" ]]; then IS_SPECIAL=true; break; fi
+              done
             fi
           fi
 
           # 2. 检查专用/通用池子并决定是否跳过分配
-          if [ "$IS_GEMINI" = true ]; then
+          if [ "$IS_SPECIAL" = true ]; then
             if [ "$GEMINI_POOL_SIZE" -gt 0 ]; then
               POOL_ARRAY=("${GEMINI_IP_POOL[@]}"); IDX=$((GEMINI_COUNTER % GEMINI_POOL_SIZE)); GEMINI_COUNTER=$((GEMINI_COUNTER + 1))
             else
-              # 判定为 gemini 但无 IP，跳过分配，保留原样
               echo "$line" >> "$OUTPUT_FILE"
               continue
             fi
