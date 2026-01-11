@@ -161,7 +161,7 @@ jobs:
         # 修复点：定义标签变量，支持大写 JP, KR
         # ==========================================
         EXACT_MATCH_TAGS="JP KR" 
-        KEEP_ORIGINAL_PORT=true  # true: 保留原端口; false: 强制替换为 IP 池中的端口
+        KEEP_ORIGINAL_PORT=false  # true: 保留原端口; false: 强制替换为 IP 池中的端口
         echo "LOG: EXACT_MATCH_TAGS is set to $EXACT_MATCH_TAGS"
 
         if [ ! -f "$TARGET_MYDIZHI" ]; then exit 0; fi
