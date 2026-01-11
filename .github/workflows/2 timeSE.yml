@@ -241,7 +241,6 @@ jobs:
             if [ -n "$JSON_STR" ] && echo "$JSON_STR" | jq empty 2>/dev/null; then
               JSON_IP=$(echo "$NEW_IP" | tr -d '[]')
               if [ "$KEEP_ORIGINAL_PORT" = true ]; then
-                # 仅替换 add 字段，保留原有 port
                 NEW_JSON=$(echo "$JSON_STR" | jq -c --arg ip "$JSON_IP" '.add = $ip')
               else
                 # 替换 add 和 port
@@ -258,11 +257,17 @@ jobs:
             ORIGINAL_PORT_PART="${BASH_REMATCH[4]}"
             REST_PART="${BASH_REMATCH[5]}"
             
-            if [ "$KEEP_ORIGINAL_PORT" = true ]; then
-              # 使用原节点端口
+            # --- 核心改动：检测 security=none ---
+            IS_NO_TLS=false
+            if [[ "$REST_PART" == *"security=none"* ]]; then
+              IS_NO_TLS=true
+            fi
+
+            if [ "$KEEP_ORIGINAL_PORT" = true ] || [ "$IS_NO_TLS" = true ]; then
+              # 若为 security=none 节点，保留原端口 ORIGINAL_PORT_PART
               echo "${PROTO}://${USERINFO}@${NEW_IP}${ORIGINAL_PORT_PART}${REST_PART}" >> "$OUTPUT_FILE"
             else
-              # 使用池子中的新端口
+              # 若有 TLS，则替换为池子里的端口
               echo "${PROTO}://${USERINFO}@${NEW_IP}:${NEW_PORT_FROM_POOL}${REST_PART}" >> "$OUTPUT_FILE"
             fi
           else
